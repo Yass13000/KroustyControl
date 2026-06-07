@@ -154,7 +154,7 @@ export default function App() {
     <div className="min-h-screen bg-[#faf6f0] text-[#b74b1b] antialiased pb-20 relative flex flex-col">
       
       {/* Header Bandeau Full-Width */}
-      <header className="w-full bg-[#ff751f] pt-5 pb-9 px-6 flex-shrink-0 relative">
+      <header className="w-full bg-[#ff751f] pt-5 pb-8 px-6 flex-shrink-0 relative">
         <div className="max-w-xl mx-auto flex flex-col items-center relative z-10">
           <img src="/logo.png" className="h-16 md:h-20 object-contain" alt="Krousty Control" />
           <p id="globalStatus" className="text-[10px] font-black text-white/90 mt-1.5 flex items-center gap-1.5 uppercase tracking-widest">
@@ -163,10 +163,13 @@ export default function App() {
           </p>
         </div>
 
-        {/* Vague moderne de transition vers le fond de page */}
+        {/* Transition géométrique oblique assortie au logo (Double biseau orange et rouille) */}
         <div className="absolute bottom-0 left-0 w-full overflow-hidden leading-[0] translate-y-[99%] z-10 pointer-events-none">
-          <svg viewBox="0 0 1200 120" preserveAspectRatio="none" className="relative block w-full h-[28px] text-[#ff751f] fill-current">
-            <path d="M321.39,56.44c58-10.79,114.16-30.13,172-41.86,82.39-16.72,168.19-17.73,250.45-.39C823.78,31,906.67,72,985.66,92.83c70.05,18.48,146.53,26.09,214.34,3V0H0V120H0C50.7,85.84,156.47,74.55,321.39,56.44Z"></path>
+          <svg viewBox="0 0 1200 120" preserveAspectRatio="none" className="relative block w-full h-[32px]">
+            {/* Polygone Rouille (Arrière-plan) */}
+            <polygon points="0,0 1200,0 1200,95 0,120" fill="#b74b1b" />
+            {/* Polygone Orange (Premier plan) */}
+            <polygon points="0,0 1200,0 1200,75 0,105" fill="#ff751f" />
           </svg>
         </div>
       </header>
