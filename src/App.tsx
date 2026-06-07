@@ -27,11 +27,9 @@ export default function App() {
   const [availableGroups, setAvailableGroups] = useState<Group[]>([]);
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
 
-  // Shared state for URLs and Modes to avoid loss when toggling tabs
   const [attributionInputs, setAttributionInputs] = useState<Record<string, string>>({});
   const [groupModes, setGroupModes] = useState<Record<string, 'global' | 'per-screen'>>({});
 
-  // Fullscreen video playback state
   const [playingFile, setPlayingFile] = useState<any | null>(null);
   const [playingVideoSrc, setPlayingVideoSrc] = useState<string>('');
   const [playbackLoading, setPlaybackLoading] = useState(false);
@@ -39,16 +37,12 @@ export default function App() {
 
   const now = new Date().getTime();
 
-  // Stats calculation
   const totalScreens = availableScreens.length;
   const onlineScreens = availableScreens.filter(s => {
     if (!s.last_ping) return false;
     return (now - new Date(s.last_ping).getTime()) / 1000 < 45;
   }).length;
 
-  const unassignedCount = availableScreens.filter(s => !s.group_id).length;
-
-  // Realtime subscription setup
   useEffect(() => {
     let screensChannel: any;
     let groupsChannel: any;
@@ -71,7 +65,6 @@ export default function App() {
 
     initData();
 
-    // Setup real-time listeners
     screensChannel = sbClient.channel('screens_realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'screens_config' }, (payload) => {
         const { eventType, new: n, old: o } = payload;
@@ -129,9 +122,6 @@ export default function App() {
 
   const handleCloseVideo = () => {
     downloadCancelRef.current = true;
-    if (playingVideoSrc && playingVideoSrc.startsWith('blob:')) {
-      URL.revokeObjectURL(playingVideoSrc);
-    }
     setPlayingFile(null);
     setPlayingVideoSrc('');
     setPlaybackLoading(false);
@@ -150,9 +140,8 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#faf6f0] text-[#b74b1b] antialiased pb-32 relative flex flex-col">
+    <div className="min-h-screen bg-[#faf6f0] text-[#b74b1b] antialiased relative flex flex-col">
       
-      {/* Header Bandeau Full-Width */}
       <header className="w-full bg-[#ff751f] pt-4.5 pb-5 px-6 flex-shrink-0 relative">
         <div className="max-w-xl mx-auto flex flex-col items-center relative z-10">
           <img src="/logo.png" className="h-16 md:h-20 object-contain" alt="Krousty Control" />
@@ -162,7 +151,6 @@ export default function App() {
           </p>
         </div>
 
-        {/* Transition géométrique biseautée */}
         <div className="absolute bottom-0 left-0 w-full overflow-hidden leading-[0] translate-y-[99%] z-10 pointer-events-none">
           <svg viewBox="0 0 1200 120" preserveAspectRatio="none" className="relative block w-full h-[16px]">
             <polygon points="0,0 1200,0 1200,95 0,120" fill="#b74b1b" />
@@ -171,10 +159,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* CORRECTIF ESPACE MORT : 'pb-24' unique pour éviter tout débordement de scroll noir */}
       <main className="flex-1 max-w-xl w-full mx-auto px-4 pt-6 pb-24 space-y-6">
-
-        {/* Content Render based on active Route */}
         <div className="transition-all duration-300 ease-in-out">
           {activeTab === 'accueil' && (
             <Broadcast
@@ -203,7 +188,6 @@ export default function App() {
           )}
         </div>
 
-        {/* Footer */}
         <footer className="pt-6 opacity-30 text-center">
           <button
             onClick={hardRefresh}
@@ -214,7 +198,6 @@ export default function App() {
         </footer>
       </main>
 
-      {/* Navigation Capsule flottante */}
       <nav className="fixed bottom-5 left-1/2 -translate-x-1/2 w-[90%] max-w-md bg-white/90 backdrop-blur-2xl border border-[#e3dad0] flex justify-around items-center py-2.5 px-3 z-40 shadow-2xl rounded-full shadow-[#b74b1b]/10">
         <button
           onClick={() => setActiveTab('accueil')}
@@ -264,7 +247,7 @@ export default function App() {
         </button>
       </nav>
 
-      {/* Lecteur Vidéo Plein Écran Modal */}
+      {/* RESTAURATION DE L'IFRAME : Neutralise le CORS et débloque le flux privé de Backblaze */}
       {playingFile && (
         <div id="videoFullscreenModal" className="fixed inset-0 bg-black/95 backdrop-blur-md z-50 flex flex-col items-center justify-center p-4">
           <button
@@ -274,14 +257,12 @@ export default function App() {
             ✕ RETOUR
           </button>
           {playingVideoSrc && (
-            <video
-              key={playingVideoSrc} /* CORRECTIF : Force le lecteur à rafraîchir l'antenne et décoder le flux instantanément */
+            <iframe
               id="fullVideoElement"
-              className="w-full h-full max-w-5xl max-h-[85vh] rounded-2xl shadow-2xl object-contain outline-none"
+              className="w-full h-full max-w-5xl max-h-[85vh] rounded-2xl shadow-2xl object-contain border-none outline-none"
               src={playingVideoSrc}
-              controls
-              autoPlay
-              playsInline
+              allow="autoplay; encrypted-media"
+              allowFullScreen
             />
           )}
         </div>

@@ -29,6 +29,9 @@ export default function Videos({ onPlayVideo }: VideosProps) {
   const [albumVideos, setAlbumVideos] = useState<Record<string, VideoFile[]>>({});
   const [b2Videos, setB2Videos] = useState<B2ScannedVideo[]>([]);
   const [b2DownloadToken, setB2DownloadToken] = useState('');
+  
+  // CORRECTIF PROTECTION : Stockage de l'hôte de téléchargement dynamique de la session active
+  const [b2ActiveDownloadUrl, setB2ActiveDownloadUrl] = useState('');
 
   // UI states
   const [loading, setLoading] = useState(false);
@@ -55,11 +58,10 @@ export default function Videos({ onPlayVideo }: VideosProps) {
   // ==========================================
   // 🔐 CONFIGURATION BUCKET PRIVÉ KROUSTYCONTROL
   // ==========================================
-  const B2_KEY_ID = "00382696474bd910000000001"; 
-  const B2_APPLICATION_KEY = "K003CXTldNwALY4kB2nrOSptF/Gleuo";
-  const B2_BUCKET_ID = "a872d62946a4a7149bed0911";
-  const B2_BUCKET_NAME = "KroustyControl"; 
-
+const B2_KEY_ID = "00382696474bd910000000002"; 
+const B2_APPLICATION_KEY = "K003nlIsqBOZ/HM0VmU1MafcE62+rYY";
+const B2_BUCKET_ID = "a872d62946a4a7149bed0911";
+const B2_BUCKET_NAME = "KroustyControl";
   const formatBytes = (bytes: number, decimals = 1) => {
     if (!bytes) return '0 Ko';
     const k = 1024;
@@ -78,9 +80,13 @@ export default function Videos({ onPlayVideo }: VideosProps) {
     const targetUrl = "https://api.backblazeb2.com/b2api/v2/b2_authorize_account";
     const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, {
       method: 'GET',
-      headers: { 'Authorization': `Basic ${credentials}` }
+      headers: { 
+        'Authorization': `Basic ${credentials}`,
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache'
+      }
     });
-    if (!res.ok) throw new Error("Échec d'authentification Backblaze B2 via le proxy");
+    if (!res.ok) throw new Error("Échec d'authentification Backblaze B2");
     return res.json();
   };
 
@@ -121,21 +127,34 @@ export default function Videos({ onPlayVideo }: VideosProps) {
     try {
       const auth = await authorizeB2();
       
+      // Enregistrement de l'hôte valide retourné pour cette session
+      if (auth.downloadUrl) {
+        setB2ActiveDownloadUrl(auth.downloadUrl);
+      }
+
       const tokenUrl = `${auth.apiUrl}/b2api/v2/b2_get_download_authorization`;
       const tokenRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(tokenUrl)}`, {
         method: 'POST',
-        headers: { 'Authorization': auth.authorizationToken, 'Content-Type': 'application/json' },
+        headers: { 
+          'Authorization': auth.authorizationToken, 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache'
+        },
         body: JSON.stringify({ bucketId: B2_BUCKET_ID, fileNamePrefix: "", validDurationInSeconds: 7200 })
       });
 
       const listUrl = `${auth.apiUrl}/b2api/v2/b2_list_file_names`;
       const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(listUrl)}`, {
         method: 'POST',
-        headers: { 'Authorization': auth.authorizationToken, 'Content-Type': 'application/json' },
+        headers: { 
+          'Authorization': auth.authorizationToken, 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache'
+        },
         body: JSON.stringify({ bucketId: B2_BUCKET_ID, maxFileCount: 1000 })
       });
 
-      if (!tokenRes.ok || !res.ok) throw new Error("Impossible de récupérer les autorisations de téléchargement");
+      if (!tokenRes.ok || !res.ok) throw new Error("Impossible de récupérer les autorisations");
       
       const tokenData = await tokenRes.json();
       setB2DownloadToken(tokenData.authorizationToken);
@@ -151,20 +170,31 @@ export default function Videos({ onPlayVideo }: VideosProps) {
 
       setB2Videos(scanned);
     } catch (err) {
-      // CORRECTIF VISUEL : On force l'affichage de l'erreur dans la console pour traquer le blocage du proxy
       console.error("DIAGNOSTIC FLUX B2:", err);
     } finally {
       if (!silent) setScanningB2(false);
     }
   };
 
+  // CORRECTIF SECURITE SANS FAILLE : Extraction du nom et reconstruction forcée sur l'hôte de session actif
   const getAuthenticatedUrl = (url: string) => {
     if (!url) return '';
-    const cleanUrl = url.replace(/ /g, '%20');
-    if (cleanUrl.includes("backblazeb2.com") && b2DownloadToken) {
-      return `${cleanUrl}?Authorization=${b2DownloadToken}`;
+    
+    const baseUrl = url.split('?')[0].trim();
+    const marker = `/file/${B2_BUCKET_NAME}/`;
+    const parts = baseUrl.split(marker);
+    
+    if (parts.length < 2) return baseUrl;
+    const fileName = parts[1];
+
+    const currentHost = b2ActiveDownloadUrl || "https://f003.backblazeb2.com";
+    const cleanFileName = fileName.replace(/ /g, '%20');
+    const finalBaseUrl = `${currentHost}${marker}${cleanFileName}`;
+    
+    if (b2DownloadToken) {
+      return `${finalBaseUrl}?Authorization=${b2DownloadToken}`;
     }
-    return cleanUrl;
+    return finalBaseUrl;
   };
 
   const getBrowserFriendlyUrl = (url: string) => {
@@ -224,7 +254,11 @@ export default function Videos({ onPlayVideo }: VideosProps) {
       const uploadUrlTarget = `${auth.apiUrl}/b2api/v2/b2_get_upload_url`;
       const urlRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(uploadUrlTarget)}`, {
         method: 'POST',
-        headers: { 'Authorization': auth.authorizationToken, 'Content-Type': 'application/json' },
+        headers: { 
+          'Authorization': auth.authorizationToken, 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache'
+        },
         body: JSON.stringify({ bucketId: B2_BUCKET_ID })
       });
       if (!urlRes.ok) throw new Error("Impossible de générer l'URL d'upload");
@@ -304,7 +338,6 @@ export default function Videos({ onPlayVideo }: VideosProps) {
     setGeneratingLinkFileId(scannedFile.name);
     try {
       const auth = await authorizeB2();
-      
       const shareLink = `${auth.downloadUrl}/file/${B2_BUCKET_NAME}/${scannedFile.name}`;
       const fileSizeFormatted = formatBytes(scannedFile.size);
 
@@ -340,7 +373,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
 
   const handleDeleteVideo = async (videoId: string, name: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm(`Retirer la vidéo "${name}" de cet album ?`)) {
+    if (confirm("Retirer la vidéo de cet album ?")) {
       await sbClient.from('videos').delete().eq('id', videoId);
       await fetchSupabaseData();
     }
@@ -431,7 +464,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                             ) : (
                               <div className="w-full h-full bg-gradient-to-br from-white to-[#faf6f0] flex items-center justify-center text-[#ff751f]/30">
                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2 2z" />
                                 </svg>
                               </div>
                             )}
@@ -502,7 +535,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                         />
                       ) : v.url && b2DownloadToken ? ( 
                         <video
-                          key={b2DownloadToken} // REPARATION : Forcer la reconstruction si le token change
+                          key={`${v.id}-${b2DownloadToken}`} 
                           src={getBrowserFriendlyUrl(v.url)}
                           className="w-full h-full object-cover pointer-events-none scale-105 group-hover:scale-110 transition-transform duration-500"
                           muted
@@ -575,7 +608,6 @@ export default function Videos({ onPlayVideo }: VideosProps) {
         className="hidden"
       />
 
-      {/* FAB Menu */}
       <div className="fixed bottom-36 right-5 z-40 flex flex-col items-end">
         {showFabMenu && (
           <div className="bg-white/95 border border-[#e3dad0] p-2.5 rounded-2xl shadow-2xl flex flex-col gap-1.5 mb-3 backdrop-blur-md min-w-[160px] animate-in fade-in slide-in-from-bottom-2 duration-200">
@@ -584,7 +616,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                 setShowFabMenu(false);
                 setShowCreateAlbum(true);
               }}
-              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#faf6f0] text-xs font-bold text-[#b74b1b] transition-colors flex items-center gap-2"
+              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#faf6f0] text-xs font-bold text-[#b74b1b] transition-colors"
             >
               Nouveau Dossier
             </button>
@@ -593,7 +625,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                 setShowFabMenu(false);
                 fileInputRef.current?.click();
               }}
-              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#faf6f0] text-xs font-bold text-[#b74b1b] transition-colors flex items-center gap-2"
+              className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#faf6f0] text-xs font-bold text-[#b74b1b] transition-colors"
             >
               Envoyer sur Backblaze
             </button>
@@ -612,10 +644,9 @@ export default function Videos({ onPlayVideo }: VideosProps) {
         </button>
       </div>
 
-      {/* Create Album Modal */}
       {showCreateAlbum && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white border border-[#f2ede4] w-full max-w-sm rounded-3xl p-6 space-y-4 shadow-2xl">
+          <div className="bg-white border border-[#f2ede4] w-full max-sm rounded-3xl p-6 space-y-4 shadow-2xl">
             <div>
               <h3 className="text-sm font-bold text-[#b74b1b]">Créer un dossier</h3>
               <p className="text-[11px] text-[#7c6258] mt-1">Nom du dossier :</p>
@@ -648,7 +679,6 @@ export default function Videos({ onPlayVideo }: VideosProps) {
         </div>
       )}
 
-      {/* Assign Video Modal */}
       {showAddVideoModal && activeAlbumId && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
           <div className="bg-white border border-[#f2ede4] w-full max-w-md rounded-3xl p-6 space-y-4 shadow-2xl">
@@ -716,7 +746,6 @@ export default function Videos({ onPlayVideo }: VideosProps) {
         </div>
       )}
 
-      {/* Uploading Overlay */}
       {uploadingToB2 && (
         <div className="fixed inset-0 bg-black/80 z-50 flex flex-col items-center justify-center p-4 backdrop-blur-md">
           <div className="w-10 h-10 border-4 border-[#ff751f]/20 border-t-[#ff751f] rounded-full animate-spin mb-4"></div>

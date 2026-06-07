@@ -54,8 +54,8 @@ export default function Screens({
 
   const now = new Date().getTime();
 
-  const B2_KEY_ID = "00382696474bd910000000001"; 
-  const B2_APPLICATION_KEY = "K003CXTldNwALY4kB2nrOSptF/Gleuo";
+  const B2_KEY_ID = "00382696474bd910000000002"; 
+  const B2_APPLICATION_KEY = "K003nlIsqBOZ/HM0VmU1MafcE62+rYY";
   const B2_BUCKET_ID = "a872d62946a4a7149bed0911";
 
   const isScreenOnline = (lastPing: string | null) => {
