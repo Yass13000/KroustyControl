@@ -1,6 +1,6 @@
 {
-  "name": "Menuboard Studio Premium",
-  "short_name": "MenuBoard",
+  "name": "KroustyControl",
+  "short_name": "KroustyControl",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#4C5454",
