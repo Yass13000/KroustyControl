@@ -80,7 +80,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
       method: 'GET',
       headers: { 'Authorization': `Basic ${credentials}` }
     });
-    if (!res.ok) throw new Error("Échec d'authentification Backblaze B2");
+    if (!res.ok) throw new Error("Échec d'authentification Backblaze B2 via le proxy");
     return res.json();
   };
 
@@ -135,7 +135,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
         body: JSON.stringify({ bucketId: B2_BUCKET_ID, maxFileCount: 1000 })
       });
 
-      if (!tokenRes.ok || !res.ok) throw new Error("Impossible de récupérer les autorisations ou fichiers");
+      if (!tokenRes.ok || !res.ok) throw new Error("Impossible de récupérer les autorisations de téléchargement");
       
       const tokenData = await tokenRes.json();
       setB2DownloadToken(tokenData.authorizationToken);
@@ -151,7 +151,8 @@ export default function Videos({ onPlayVideo }: VideosProps) {
 
       setB2Videos(scanned);
     } catch (err) {
-      console.error("Erreur scan B2:", err);
+      // CORRECTIF VISUEL : On force l'affichage de l'erreur dans la console pour traquer le blocage du proxy
+      console.error("DIAGNOSTIC FLUX B2:", err);
     } finally {
       if (!silent) setScanningB2(false);
     }
@@ -159,10 +160,11 @@ export default function Videos({ onPlayVideo }: VideosProps) {
 
   const getAuthenticatedUrl = (url: string) => {
     if (!url) return '';
-    if (url.includes("backblazeb2.com") && b2DownloadToken) {
-      return `${url}?Authorization=${b2DownloadToken}`;
+    const cleanUrl = url.replace(/ /g, '%20');
+    if (cleanUrl.includes("backblazeb2.com") && b2DownloadToken) {
+      return `${cleanUrl}?Authorization=${b2DownloadToken}`;
     }
-    return url;
+    return cleanUrl;
   };
 
   const getBrowserFriendlyUrl = (url: string) => {
@@ -229,7 +231,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
       const uploadTarget = await urlRes.json();
 
       const arrayBuffer = await file.arrayBuffer();
-      const uploadRes = await fetch(uploadTarget.uploadUrl, {
+      const uploadRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(uploadTarget.uploadUrl)}`, {
         method: 'POST',
         headers: {
           'Authorization': uploadTarget.authorizationToken,
@@ -405,8 +407,6 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                       className="glass-card p-4 bg-white/40 hover:bg-white border border-[#f2ede4] rounded-2xl shadow-xl flex justify-between items-center cursor-pointer select-none transition-all duration-300 group"
                     >
                       <div className="flex items-center gap-4">
-                        
-                        {/* REPARATION ET DESIGN : Miniatures et empilement dynamique au lieu de l'émoji brut */}
                         <div className="relative w-16 h-12 flex-shrink-0">
                           {videosCount > 1 && (
                             <div className="absolute inset-0 bg-[#b74b1b]/15 rounded-xl translate-x-1.5 translate-y-1 rotate-3 shadow-sm border border-[#f2ede4]"></div>
@@ -462,11 +462,11 @@ export default function Videos({ onPlayVideo }: VideosProps) {
           )}
         </>
       ) : (
-        <div className="fixed inset-0 bg-[#faf6f0] z-40 overflow-y-auto px-5 py-6 pb-20 flex flex-col space-y-6">
+        <div className="fixed inset-0 bg-[#faf6f0] z-40 overflow-y-auto px-5 py-6 pb-32 flex flex-col space-y-6">
           <div className="flex justify-between items-center border-b border-[#e3dad0] pb-4">
             <div>
-              <h2 className="text-lg font-bold text-[#b74b1b] uppercase tracking-wider flex items-center gap-2">
-                <span>📁</span> {activeAlbumForView.name}
+              <h2 className="text-lg font-bold text-[#b74b1b] uppercase tracking-wider">
+                {activeAlbumForView.name}
               </h2>
               <p className="text-[10px] text-[#ff751f] font-semibold mt-0.5">
                 {(albumVideos[activeAlbumForView.id] || []).length} vidéo(s) dans l'album
@@ -476,7 +476,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
               onClick={() => setActiveAlbumForView(null)}
               className="bg-white hover:bg-[#faf6f0] border border-[#e3dad0] text-[#b74b1b] px-4 py-2 rounded-full text-xs font-bold transition-all active:scale-95 shadow-md"
             >
-              ✕ RETOUR
+              RETOUR
             </button>
           </div>
 
@@ -502,6 +502,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                         />
                       ) : v.url && b2DownloadToken ? ( 
                         <video
+                          key={b2DownloadToken} // REPARATION : Forcer la reconstruction si le token change
                           src={getBrowserFriendlyUrl(v.url)}
                           className="w-full h-full object-cover pointer-events-none scale-105 group-hover:scale-110 transition-transform duration-500"
                           muted
@@ -560,7 +561,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
               onClick={() => openAssignVideoModal(activeAlbumForView.id)}
               className="w-full bg-white/80 hover:bg-white border border-dashed border-[#e3dad0] hover:border-[#ff751f]/50 text-[#b74b1b] text-xs font-bold py-4 rounded-2xl transition-all flex items-center justify-center gap-1.5 active:scale-99 shadow-sm"
             >
-              <span>＋ Associer une Vidéo Backblaze</span>
+              <span>Associer une Vidéo Backblaze</span>
             </button>
           </div>
         </div>
@@ -585,7 +586,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
               }}
               className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#faf6f0] text-xs font-bold text-[#b74b1b] transition-colors flex items-center gap-2"
             >
-              <span>📁</span> Nouveau Dossier
+              Nouveau Dossier
             </button>
             <button
               onClick={() => {
@@ -594,7 +595,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
               }}
               className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#faf6f0] text-xs font-bold text-[#b74b1b] transition-colors flex items-center gap-2"
             >
-              <span>🎥</span> Envoyer sur Backblaze
+              Envoyer sur Backblaze
             </button>
           </div>
         )}

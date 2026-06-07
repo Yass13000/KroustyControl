@@ -150,8 +150,7 @@ export default function App() {
   };
 
   return (
-    /* CORRECTIF DE STRUCTURE : Passage en flex flex-col pour maîtriser parfaitement l'étirement du fond crème */
-    <div className="min-h-screen bg-[#faf6f0] text-[#b74b1b] antialiased pb-20 relative flex flex-col">
+    <div className="min-h-screen bg-[#faf6f0] text-[#b74b1b] antialiased pb-32 relative flex flex-col">
       
       {/* Header Bandeau Full-Width */}
       <header className="w-full bg-[#ff751f] pt-4.5 pb-5 px-6 flex-shrink-0 relative">
@@ -163,18 +162,16 @@ export default function App() {
           </p>
         </div>
 
-        {/* Transition géométrique oblique assortie au logo (Double biseau orange et rouille) */}
+        {/* Transition géométrique biseautée */}
         <div className="absolute bottom-0 left-0 w-full overflow-hidden leading-[0] translate-y-[99%] z-10 pointer-events-none">
           <svg viewBox="0 0 1200 120" preserveAspectRatio="none" className="relative block w-full h-[16px]">
-            {/* Polygone Rouille (Arrière-plan) */}
             <polygon points="0,0 1200,0 1200,95 0,120" fill="#b74b1b" />
-            {/* Polygone Orange (Premier plan) */}
             <polygon points="0,0 1200,0 1200,75 0,105" fill="#ff751f" />
           </svg>
         </div>
       </header>
 
-      {/* CORRECTIF NETTOYAGE : pb-24 unique ici, ce qui élimine tout l'espace mort inutile en fin de page */}
+      {/* CORRECTIF ESPACE MORT : 'pb-24' unique pour éviter tout débordement de scroll noir */}
       <main className="flex-1 max-w-xl w-full mx-auto px-4 pt-6 pb-24 space-y-6">
 
         {/* Content Render based on active Route */}
@@ -206,7 +203,7 @@ export default function App() {
           )}
         </div>
 
-        {/* Footer Nettoyé de ses paddings doublons */}
+        {/* Footer */}
         <footer className="pt-6 opacity-30 text-center">
           <button
             onClick={hardRefresh}
@@ -217,7 +214,7 @@ export default function App() {
         </footer>
       </main>
 
-      {/* Navigation Capsule flottante premium */}
+      {/* Navigation Capsule flottante */}
       <nav className="fixed bottom-5 left-1/2 -translate-x-1/2 w-[90%] max-w-md bg-white/90 backdrop-blur-2xl border border-[#e3dad0] flex justify-around items-center py-2.5 px-3 z-40 shadow-2xl rounded-full shadow-[#b74b1b]/10">
         <button
           onClick={() => setActiveTab('accueil')}
@@ -278,6 +275,7 @@ export default function App() {
           </button>
           {playingVideoSrc && (
             <video
+              key={playingVideoSrc} /* CORRECTIF : Force le lecteur à rafraîchir l'antenne et décoder le flux instantanément */
               id="fullVideoElement"
               className="w-full h-full max-w-5xl max-h-[85vh] rounded-2xl shadow-2xl object-contain outline-none"
               src={playingVideoSrc}
