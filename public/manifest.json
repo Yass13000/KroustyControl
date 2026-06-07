@@ -1,0 +1,23 @@
+{
+  "name": "Menuboard Cloud",
+  "short_name": "MenuControl",
+  "description": "Gestionnaire de MenuBoard Studio",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#4C5454",
+  "theme_color": "#FF715B",
+  "icons": [
+    {
+      "src": "iconmob.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "iconmob.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

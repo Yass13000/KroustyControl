@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+    font-family: 'HelveticaCustom';
+    src: url('/fonts/Helvetica.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+}
+
+:root {
+  --font-sans: 'Outfit', 'HelveticaCustom', -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+}
+
+body { 
+    background: #faf6f0;
+    color: #b74b1b; 
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    background-image: 
+        radial-gradient(at 0% 0%, rgba(255, 117, 31, 0.04) 0px, transparent 50%),
+        radial-gradient(at 100% 0%, rgba(183, 75, 27, 0.03) 0px, transparent 50%);
+    background-attachment: fixed;
+}
+
+/* Glassmorphism Styles (Adapted to Warm White theme) */
+.glass-card {
+    background: #ffffff;
+    border: 1px solid #f2ede4;
+    border-radius: 24px;
+    box-shadow: 0 6px 24px 0 rgba(183, 75, 27, 0.03);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+    border-color: #ff751f;
+    box-shadow: 0 10px 32px 0 rgba(183, 75, 27, 0.06);
+}
+
+.glass-input {
+    background: #ffffff;
+    border: 1px solid #e3dad0;
+    color: #b74b1b;
+    transition: all 0.2s ease-in-out;
+}
+
+.glass-input:focus {
+    border-color: #ff751f;
+    background: #ffffff;
+    box-shadow: 0 0 15px rgba(255, 117, 31, 0.1);
+}
+
+/* Scrollbar customization */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.2);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* Glowing effects */
+.btn-glow {
+    position: relative;
+    overflow: hidden;
+}
+
+.btn-glow::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(120deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+    transform: translateX(-100%);
+    transition: transform 0.6s ease-in-out;
+}
+
+.btn-glow:hover::after {
+    transform: translateX(100%);
+}
+
+.pulse-green {
+    box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.4);
+    animation: pulse-green-anim 2s infinite;
+}
+
+@keyframes pulse-green-anim {
+    0% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.7);
+    }
+    70% {
+        transform: scale(1);
+        box-shadow: 0 0 0 6px rgba(52, 199, 89, 0);
+    }
+    100% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(52, 199, 89, 0);
+    }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Menuboard Studio Premium",
+  "short_name": "MenuBoard",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#4C5454",
+  "theme_color": "#4C5454",
+  "icons": [
+    {
+      "src": "/iconmob.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
