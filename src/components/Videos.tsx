@@ -15,11 +15,6 @@ interface SupabaseAlbum {
   name: string;
 }
 
-interface B2ScannedVideo {
-  name: string;
-  size: number;
-}
-
 interface VideosProps {
   onPlayVideo: (fileUrl: string) => void;
 }
@@ -27,16 +22,12 @@ interface VideosProps {
 export default function Videos({ onPlayVideo }: VideosProps) {
   const [albums, setAlbums] = useState<SupabaseAlbum[]>([]);
   const [albumVideos, setAlbumVideos] = useState<Record<string, VideoFile[]>>({});
-  const [b2Videos, setB2Videos] = useState<B2ScannedVideo[]>([]);
-  const [b2DownloadToken, setB2DownloadToken] = useState('');
   
-  // CORRECTIF PROTECTION : Stockage de l'hôte de téléchargement dynamique de la session active
-  const [b2ActiveDownloadUrl, setB2ActiveDownloadUrl] = useState('');
+  // Maintien de la compatibilité avec vos balises vidéo du JSX
+  const [b2DownloadToken] = useState('link_cdn_active');
 
   // UI states
   const [loading, setLoading] = useState(false);
-  const [scanningB2, setScanningB2] = useState(false);
-  const [uploadingToB2, setUploadingToB2] = useState(false);
   const [albumSearchQuery, setAlbumSearchQuery] = useState('');
   
   // Navigation state
@@ -47,47 +38,51 @@ export default function Videos({ onPlayVideo }: VideosProps) {
   const [showCreateAlbum, setShowCreateAlbum] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState('');
 
-  // Add Video Modal
+  // Add Video Form States
   const [showAddVideoModal, setShowAddVideoModal] = useState(false);
+  const [newVideoName, setNewVideoName] = useState('');
+  const [newVideoUrl, setNewVideoUrl] = useState('');
   const [activeAlbumId, setActiveAlbumId] = useState<string | null>(null);
-  const [b2SearchQuery, setB2SearchQuery] = useState('');
-  const [generatingLinkFileId, setGeneratingLinkFileId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ==========================================
-  // 🔐 CONFIGURATION BUCKET PRIVÉ KROUSTYCONTROL
-  // ==========================================
-const B2_KEY_ID = "00382696474bd910000000002"; 
-const B2_APPLICATION_KEY = "K003nlIsqBOZ/HM0VmU1MafcE62+rYY";
-const B2_BUCKET_ID = "a872d62946a4a7149bed0911";
-const B2_BUCKET_NAME = "KroustyControl";
-  const formatBytes = (bytes: number, decimals = 1) => {
-    if (!bytes) return '0 Ko';
-    const k = 1024;
-    const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['Octets', 'Ko', 'Mo', 'Go', 'To'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-  };
-
   const getFileExtension = (filename: string) => {
-    return filename.split('.').pop()?.toUpperCase() || 'VID';
+    return filename.split('.').pop()?.toUpperCase() || 'LINK';
   };
 
-  const authorizeB2 = async () => {
-    const credentials = btoa(`${B2_KEY_ID}:${B2_APPLICATION_KEY}`);
-    const targetUrl = "https://api.backblazeb2.com/b2api/v2/b2_authorize_account";
-    const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, {
-      method: 'GET',
-      headers: { 
-        'Authorization': `Basic ${credentials}`,
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache'
+  // =========================================================
+  // 🛡️ AUTOMATE DE SÉCURISATION DROPBOX AVEC FIX DE CLÉ RLKEY
+  // =========================================================
+  const transformStorageUrl = (url: string): string => {
+    let cleanUrl = url.trim();
+    if (!cleanUrl) return '';
+
+    // 1. Gestion du format Dropbox (SCL avec clé rlkey)
+    if (cleanUrl.includes('dropbox.com')) {
+      let directUrl = cleanUrl.replace('www.dropbox.com', 'dl.dropboxusercontent.com');
+      directUrl = directUrl.replace('dl=0', 'raw=1').replace('dl=1', 'raw=1');
+      
+      if (!directUrl.includes('raw=1')) {
+        directUrl += directUrl.includes('?') ? '&raw=1' : '?raw=1';
       }
-    });
-    if (!res.ok) throw new Error("Échec d'authentification Backblaze B2");
-    return res.json();
+      return directUrl;
+    }
+
+    // 2. Sécurisation Google Drive
+    if (cleanUrl.includes('drive.google.com') || cleanUrl.includes('docs.google.com')) {
+      const regExpId = /\/d\/([a-zA-Z0-9-_]+)/;
+      const regExpParam = /[?&]id=([a-zA-Z0-9-_]+)/;
+      
+      const matchId = cleanUrl.match(regExpId);
+      const matchParam = cleanUrl.match(regExpParam);
+      const fileId = (matchId && matchId[1]) || (matchParam && matchParam[1]);
+
+      if (fileId) {
+        return `https://docs.google.com/uc?export=download&id=${fileId}`;
+      }
+    }
+
+    return cleanUrl;
   };
 
   const fetchSupabaseData = async () => {
@@ -122,91 +117,14 @@ const B2_BUCKET_NAME = "KroustyControl";
     }
   };
 
-  const scanB2Account = async (silent = false) => {
-    if (!silent) setScanningB2(true);
-    try {
-      const auth = await authorizeB2();
-      
-      // Enregistrement de l'hôte valide retourné pour cette session
-      if (auth.downloadUrl) {
-        setB2ActiveDownloadUrl(auth.downloadUrl);
-      }
-
-      const tokenUrl = `${auth.apiUrl}/b2api/v2/b2_get_download_authorization`;
-      const tokenRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(tokenUrl)}`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': auth.authorizationToken, 
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache'
-        },
-        body: JSON.stringify({ bucketId: B2_BUCKET_ID, fileNamePrefix: "", validDurationInSeconds: 7200 })
-      });
-
-      const listUrl = `${auth.apiUrl}/b2api/v2/b2_list_file_names`;
-      const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(listUrl)}`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': auth.authorizationToken, 
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache'
-        },
-        body: JSON.stringify({ bucketId: B2_BUCKET_ID, maxFileCount: 1000 })
-      });
-
-      if (!tokenRes.ok || !res.ok) throw new Error("Impossible de récupérer les autorisations");
-      
-      const tokenData = await tokenRes.json();
-      setB2DownloadToken(tokenData.authorizationToken);
-      
-      const data = await res.json();
-      
-      const scanned: B2ScannedVideo[] = (data.files || [])
-        .filter((f: any) => f.fileName.match(/\.(mp4|mkv|mov|avi|webm)$/i))
-        .map((f: any) => ({
-          name: f.fileName,
-          size: f.contentLength || 0
-        }));
-
-      setB2Videos(scanned);
-    } catch (err) {
-      console.error("DIAGNOSTIC FLUX B2:", err);
-    } finally {
-      if (!silent) setScanningB2(false);
-    }
-  };
-
-  // CORRECTIF SECURITE SANS FAILLE : Extraction du nom et reconstruction forcée sur l'hôte de session actif
-  const getAuthenticatedUrl = (url: string) => {
-    if (!url) return '';
-    
-    const baseUrl = url.split('?')[0].trim();
-    const marker = `/file/${B2_BUCKET_NAME}/`;
-    const parts = baseUrl.split(marker);
-    
-    if (parts.length < 2) return baseUrl;
-    const fileName = parts[1];
-
-    const currentHost = b2ActiveDownloadUrl || "https://f003.backblazeb2.com";
-    const cleanFileName = fileName.replace(/ /g, '%20');
-    const finalBaseUrl = `${currentHost}${marker}${cleanFileName}`;
-    
-    if (b2DownloadToken) {
-      return `${finalBaseUrl}?Authorization=${b2DownloadToken}`;
-    }
-    return finalBaseUrl;
-  };
-
-  const getBrowserFriendlyUrl = (url: string) => {
-    return getAuthenticatedUrl(url);
-  };
+  const getBrowserFriendlyUrl = (url: string) => url;
+  const getAuthenticatedUrl = (url: string) => url;
 
   useEffect(() => {
     const init = async () => {
       setLoading(true);
       await fetchSupabaseData();
       setLoading(false);
-      scanB2Account(true);
     };
     
     init();
@@ -243,61 +161,20 @@ const B2_BUCKET_NAME = "KroustyControl";
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setUploadingToB2(true);
-    try {
-      const auth = await authorizeB2();
-
-      const uploadUrlTarget = `${auth.apiUrl}/b2api/v2/b2_get_upload_url`;
-      const urlRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(uploadUrlTarget)}`, {
-        method: 'POST',
-        headers: { 
-          'Authorization': auth.authorizationToken, 
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache'
-        },
-        body: JSON.stringify({ bucketId: B2_BUCKET_ID })
-      });
-      if (!urlRes.ok) throw new Error("Impossible de générer l'URL d'upload");
-      const uploadTarget = await urlRes.json();
-
-      const arrayBuffer = await file.arrayBuffer();
-      const uploadRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(uploadTarget.uploadUrl)}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': uploadTarget.authorizationToken,
-          'X-Bz-File-Name': encodeURIComponent(file.name),
-          'Content-Type': file.type || 'video/mp4',
-          'X-Bz-Content-Sha1': 'do_not_verify'
-        },
-        body: arrayBuffer
-      });
-
-      if (!uploadRes.ok) throw new Error("Échec du téléversement");
-
-      alert(`Vidéo "${file.name}" envoyée avec succès sur Backblaze B2 !`);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      scanB2Account(true);
-    } catch (err) {
-      console.error(err);
-      alert("Erreur de connexion avec Backblaze B2 lors du téléversement.");
-    } finally {
-      setUploadingToB2(false);
-    }
-  };
-
-  const openAssignVideoModal = (albumId: string) => {
-    setActiveAlbumId(albumId);
-    setB2SearchQuery('');
-    setShowAddVideoModal(true);
-    scanB2Account(true);
-  };
-
+  // 🛡️ CAPTURE SÉCURISÉE AVEC TIMEOUT ANTI-BLOCAGE CORS
   const generateThumbnailFromUrl = (url: string): Promise<string> => {
     return new Promise((resolve) => {
+      // Si Dropbox ou Drive met trop de temps à répondre (CORS bloqué), on annule après 1.5s pour ne pas figer l'UI
+      const safetyTimeout = setTimeout(() => {
+        resolve('');
+      }, 1500);
+
+      if (url.includes('google.com') || url.includes('docs.google.com')) {
+        clearTimeout(safetyTimeout);
+        resolve('');
+        return;
+      }
+
       const video = document.createElement('video');
       video.src = url;
       video.crossOrigin = 'anonymous';
@@ -318,57 +195,79 @@ const B2_BUCKET_NAME = "KroustyControl";
           if (ctx) {
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+            clearTimeout(safetyTimeout);
             resolve(dataUrl);
           } else {
+            clearTimeout(safetyTimeout);
             resolve('');
           }
         } catch (e) {
+          clearTimeout(safetyTimeout);
           resolve('');
         }
       };
       
       video.onerror = () => {
-        resolve('');
+        clearTimeout(safetyTimeout);
+        resolve(''); 
       };
     });
   };
 
-  const handleAssignVideo = async (scannedFile: B2ScannedVideo) => {
-    if (!activeAlbumId) return;
-    setGeneratingLinkFileId(scannedFile.name);
-    try {
-      const auth = await authorizeB2();
-      const shareLink = `${auth.downloadUrl}/file/${B2_BUCKET_NAME}/${scannedFile.name}`;
-      const fileSizeFormatted = formatBytes(scannedFile.size);
+  const handleAddVideoLink = async () => {
+    const name = newVideoName.trim();
+    const rawUrl = newVideoUrl.trim();
+    const currentTargetAlbumId = activeAlbumForView?.id || activeAlbumId;
 
-      const thumbnailDataUrl = await generateThumbnailFromUrl(getBrowserFriendlyUrl(shareLink));
+    if (!name || !rawUrl) {
+      alert("Veuillez remplir tous les champs.");
+      return;
+    }
+
+    if (!currentTargetAlbumId) {
+      alert("Sélectionnez ou ouvrez un dossier avant d'ajouter.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const directCloudUrl = transformStorageUrl(rawUrl);
+      const thumbnailDataUrl = await generateThumbnailFromUrl(directCloudUrl);
 
       const { error } = await sbClient.from('videos').insert([{
-        album_id: activeAlbumId,
-        name: scannedFile.name,
-        url: shareLink, 
-        size: fileSizeFormatted,
-        thumbnail: thumbnailDataUrl
+        album_id: currentTargetAlbumId,
+        name: name,
+        url: directCloudUrl,
+        size: 'Lien Cloud',
+        thumbnail: thumbnailDataUrl || null
       }]);
 
-      if (error && error.message.includes('column "thumbnail" of relation "videos" does not exist')) {
+      if (error && error.message.includes('column "thumbnail"')) {
         await sbClient.from('videos').insert([{
-          album_id: activeAlbumId,
-          name: scannedFile.name,
-          url: shareLink,
-          size: fileSizeFormatted
+          album_id: currentTargetAlbumId,
+          name: name,
+          url: directCloudUrl,
+          size: 'Lien Cloud'
         }]);
       }
 
+      setNewVideoName('');
+      setNewVideoUrl('');
       setShowAddVideoModal(false);
       setActiveAlbumId(null);
       await fetchSupabaseData();
-    } catch (err) {
+      alert(`Vidéo "${name}" configurée et enregistrée avec succès !`);
+    } catch (err: any) {
       console.error(err);
-      alert("Erreur lors de la liaison du fichier.");
+      alert(`Erreur d'enregistrement : ${err.message || err}`);
     } finally {
-      setGeneratingLinkFileId(null);
+      setLoading(false);
     }
+  };
+
+  const openAssignVideoModal = (albumId: string) => {
+    setActiveAlbumId(albumId);
+    setShowAddVideoModal(true);
   };
 
   const handleDeleteVideo = async (videoId: string, name: string, e: React.MouseEvent) => {
@@ -388,18 +287,6 @@ const B2_BUCKET_NAME = "KroustyControl";
       alert("Impossible de copier le lien.");
     }
   };
-
-  const filteredB2Videos = b2Videos.filter(v => {
-    const matchesSearch = v.name.toLowerCase().includes(b2SearchQuery.toLowerCase());
-    if (!matchesSearch) return false;
-
-    if (activeAlbumId) {
-      const assignedVideos = albumVideos[activeAlbumId] || [];
-      const isAlreadyAssigned = assignedVideos.some(av => av.name === v.name);
-      if (isAlreadyAssigned) return false;
-    }
-    return true;
-  });
 
   return (
     <div className="space-y-4 page-content relative">
@@ -533,7 +420,7 @@ const B2_BUCKET_NAME = "KroustyControl";
                           className="w-full h-full object-cover shadow-inner scale-105 group-hover:scale-110 transition-transform duration-500"
                           alt={v.name}
                         />
-                      ) : v.url && b2DownloadToken ? ( 
+                      ) : v.url && b2DownloadToken && !v.url.includes('google.com') ? ( 
                         <video
                           key={`${v.id}-${b2DownloadToken}`} 
                           src={getBrowserFriendlyUrl(v.url)}
@@ -594,19 +481,11 @@ const B2_BUCKET_NAME = "KroustyControl";
               onClick={() => openAssignVideoModal(activeAlbumForView.id)}
               className="w-full bg-white/80 hover:bg-white border border-dashed border-[#e3dad0] hover:border-[#ff751f]/50 text-[#b74b1b] text-xs font-bold py-4 rounded-2xl transition-all flex items-center justify-center gap-1.5 active:scale-99 shadow-sm"
             >
-              <span>Associer une Vidéo Backblaze</span>
+              <span>Ajouter un Lien Vidéo (Drive, Dropbox, Cloud...)</span>
             </button>
           </div>
         </div>
       )}
-
-      <input
-        type="file"
-        ref={fileInputRef}
-        accept="video/*"
-        onChange={handleFileChange}
-        className="hidden"
-      />
 
       <div className="fixed bottom-36 right-5 z-40 flex flex-col items-end">
         {showFabMenu && (
@@ -623,11 +502,15 @@ const B2_BUCKET_NAME = "KroustyControl";
             <button
               onClick={() => {
                 setShowFabMenu(false);
-                fileInputRef.current?.click();
+                if (activeAlbumForView) {
+                  openAssignVideoModal(activeAlbumForView.id);
+                } else {
+                  alert("Veuillez d'abord ouvrir un dossier.");
+                }
               }}
               className="w-full text-left px-3 py-2 rounded-xl hover:bg-[#faf6f0] text-xs font-bold text-[#b74b1b] transition-colors"
             >
-              Envoyer sur Backblaze
+              Ajouter une Vidéo par lien
             </button>
           </div>
         )}
@@ -656,7 +539,7 @@ const B2_BUCKET_NAME = "KroustyControl";
               value={newAlbumName}
               onChange={(e) => setNewAlbumName(e.target.value)}
               placeholder="Ex: Entrées, Desserts..."
-              className="w-full bg-[#faf6f0]/60 border border-[#e3dad0] rounded-2xl p-3.5 text-xs text-[#b74b1b] placeholder-[#e3dad0] outline-none focus:border-[#ff751f]/50 transition-all font-semibold shadow-inner"
+              className="w-full bg-[#faf6f0]/60 border border-[#e3dad0] rounded-2xl p-3.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 outline-none focus:border-[#ff751f]/50 transition-all font-semibold shadow-inner"
             />
             <div className="flex gap-2 pt-1">
               <button
@@ -679,78 +562,59 @@ const B2_BUCKET_NAME = "KroustyControl";
         </div>
       )}
 
-      {showAddVideoModal && activeAlbumId && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-          <div className="bg-white border border-[#f2ede4] w-full max-w-md rounded-3xl p-6 space-y-4 shadow-2xl">
+      {/* MODAL AJOUT PAR LIEN REFAIT À NEUF AVEC ANTI-FREEZE */}
+      {showAddVideoModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white border border-[#f2ede4] w-full max-sm rounded-3xl p-6 space-y-4 shadow-2xl">
             <div>
-              <h3 className="text-sm font-bold text-[#b74b1b]">Associer une vidéo Backblaze</h3>
-              <p className="text-[11px] text-[#7c6258] mt-1">
-                Choisissez une vidéo :
-              </p>
+              <h3 className="text-sm font-bold text-[#b74b1b] uppercase tracking-wider">Ajouter une vidéo</h3>
+              <p className="text-[11px] text-[#7c6258] mt-1">Saisissez les informations du flux distant :</p>
             </div>
             
-            <input
-              type="text"
-              value={b2SearchQuery}
-              onChange={(e) => setB2SearchQuery(e.target.value)}
-              placeholder="Rechercher..."
-              className="w-full bg-[#faf6f0]/60 border border-[#e3dad0] rounded-xl p-3 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 outline-none focus:border-[#ff751f]/50 transition-all font-semibold shadow-inner"
-            />
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-bold text-[#b74b1b] uppercase tracking-wide block mb-1">Nom de la vidéo</label>
+                <input
+                  type="text"
+                  value={newVideoName}
+                  onChange={(e) => setNewVideoName(e.target.value)}
+                  placeholder="Ex: Hot Black Bao Écran Vitrine"
+                  className="w-full bg-[#faf6f0]/60 border border-[#e3dad0] rounded-2xl p-3.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/70 outline-none focus:border-[#ff751f]/50 transition-all font-semibold shadow-inner"
+                />
+              </div>
 
-            <div className="space-y-1.5 max-h-[40vh] overflow-y-auto pr-1">
-              {filteredB2Videos.length === 0 ? (
-                <p className="text-xs text-center text-[#7c6258] py-6 italic">Aucune vidéo.</p>
-              ) : (
-                filteredB2Videos.map(v => {
-                  const isGenerating = generatingLinkFileId === v.name;
-                  return (
-                    <div
-                      key={v.name}
-                      className="w-full bg-[#faf6f0]/60 p-3 rounded-2xl border border-[#e3dad0] flex justify-between items-center text-xs"
-                    >
-                      <div className="overflow-hidden flex-1 pr-2">
-                        <p className="font-bold text-[#b74b1b] truncate">{v.name}</p>
-                        <p className="text-[9px] text-[#7c6258] font-bold mt-0.5">{formatBytes(v.size)}</p>
-                      </div>
-                      <button
-                        onClick={() => handleAssignVideo(v)}
-                        disabled={generatingLinkFileId !== null}
-                        className="px-3 py-1.5 bg-[#ff751f] hover:bg-[#b74b1b] text-white rounded-lg font-bold text-[10px] transition-all flex items-center gap-1 active:scale-95"
-                      >
-                        {isGenerating ? (
-                          <>
-                            <div className="w-2.5 h-2.5 border border-white/20 border-t-white rounded-full animate-spin"></div>
-                            Lien...
-                          </>
-                        ) : (
-                          "Ajouter"
-                        )}
-                      </button>
-                    </div>
-                  );
-                })
-              )}
+              <div>
+                <label className="text-[10px] font-bold text-[#b74b1b] uppercase tracking-wide block mb-1">Lien de partage Cloud</label>
+                <input
+                  type="text"
+                  value={newVideoUrl}
+                  onChange={(e) => setNewVideoUrl(e.target.value)}
+                  placeholder="Collez l'URL de partage Dropbox ou Drive ici..."
+                  className="w-full bg-[#faf6f0]/60 border border-[#e3dad0] rounded-2xl p-3.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/70 outline-none focus:border-[#ff751f]/50 transition-all font-semibold shadow-inner"
+                />
+              </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                setShowAddVideoModal(false);
-                setActiveAlbumId(null);
-              }}
-              className="w-full bg-[#faf6f0] text-[#7c6258] text-xs font-bold py-3.5 rounded-2xl transition-colors active:scale-95 hover:bg-[#e3dad0]/40"
-            >
-              Fermer
-            </button>
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => {
+                  setShowAddVideoModal(false);
+                  setNewVideoName('');
+                  setNewVideoUrl('');
+                  setActiveAlbumId(null);
+                }}
+                className="w-1/2 bg-[#faf6f0] text-[#7c6258] text-xs font-bold py-3.5 rounded-2xl transition-colors active:scale-95 hover:bg-[#e3dad0]/40"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleAddVideoLink}
+                className="w-1/2 bg-[#ff751f] hover:bg-[#b74b1b] text-white text-xs font-bold py-3.5 rounded-2xl shadow-md transition-colors active:scale-95"
+              >
+                Ajouter
+              </button>
+            </div>
           </div>
-        </div>
-      )}
-
-      {uploadingToB2 && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex flex-col items-center justify-center p-4 backdrop-blur-md">
-          <div className="w-10 h-10 border-4 border-[#ff751f]/20 border-t-[#ff751f] rounded-full animate-spin mb-4"></div>
-          <p className="text-white text-sm font-bold tracking-wide">Envoi en cours vers Backblaze B2...</p>
-          <p className="text-slate-400 text-[10px] mt-1.5">Ne quittez pas la page.</p>
         </div>
       )}
     </div>

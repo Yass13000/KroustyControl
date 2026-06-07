@@ -247,7 +247,7 @@ export default function App() {
         </button>
       </nav>
 
-      {/* RESTAURATION DE L'IFRAME : Neutralise le CORS et débloque le flux privé de Backblaze */}
+      {/* LECTEUR VIDÉO NETIF CORRIGÉ : ZÉRO CONTRAINTE DE CACHE POUR S'OUVRIR INSTANTANÉMENT */}
       {playingFile && (
         <div id="videoFullscreenModal" className="fixed inset-0 bg-black/95 backdrop-blur-md z-50 flex flex-col items-center justify-center p-4">
           <button
@@ -257,12 +257,13 @@ export default function App() {
             ✕ RETOUR
           </button>
           {playingVideoSrc && (
-            <iframe
+            <video
               id="fullVideoElement"
-              className="w-full h-full max-w-5xl max-h-[85vh] rounded-2xl shadow-2xl object-contain border-none outline-none"
+              className="w-full h-full max-w-5xl max-h-[85vh] rounded-2xl shadow-2xl object-contain outline-none"
               src={playingVideoSrc}
-              allow="autoplay; encrypted-media"
-              allowFullScreen
+              controls
+              autoPlay
+              playsInline
             />
           )}
         </div>

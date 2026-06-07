@@ -58,6 +58,38 @@ export default function Broadcast({
   const [videoPickerTarget, setVideoPickerTarget] = useState<string | null>(null);
   const [openedAlbumId, setOpenedAlbumId] = useState<string | null>(null);
 
+  // =========================================================
+  // 🛡️ AUTOMATE DE SÉCURISATION POUR LES LIENS AUDIO MUTUALISÉS
+  // =========================================================
+  const transformStorageUrl = (url: string): string => {
+    let cleanUrl = url.trim();
+    if (!cleanUrl) return '';
+
+    // Convertisseur Dropbox (Streaming direct audio/vidéo sans téléchargement forcé)
+    if (cleanUrl.includes('dropbox.com')) {
+      let directUrl = cleanUrl.replace('www.dropbox.com', 'dl.dropboxusercontent.com');
+      directUrl = directUrl.replace('dl=0', 'raw=1').replace('dl=1', 'raw=1');
+      if (!directUrl.includes('raw=1')) {
+        directUrl += directUrl.includes('?') ? '&raw=1' : '?raw=1';
+      }
+      return directUrl;
+    }
+
+    // Convertisseur Google Drive (Flux direct export)
+    if (cleanUrl.includes('drive.google.com') || cleanUrl.includes('docs.google.com')) {
+      const regExpId = /\/d\/([a-zA-Z0-9-_]+)/;
+      const regExpParam = /[?&]id=([a-zA-Z0-9-_]+)/;
+      const matchId = cleanUrl.match(regExpId);
+      const matchParam = cleanUrl.match(regExpParam);
+      const fileId = (matchId && matchId[1]) || (matchParam && matchParam[1]);
+      if (fileId) {
+        return `https://docs.google.com/uc?export=download&id=${fileId}`;
+      }
+    }
+
+    return cleanUrl;
+  };
+
   // Charger les dossiers et vidéos
   useEffect(() => {
     const loadLibraryData = async () => {
@@ -145,10 +177,11 @@ export default function Broadcast({
     }));
   };
 
+  // CORRIGÉ : Nettoyage du bug de ciblage de l'identifiant du groupe
   const updateScheduleInput = (groupId: string, type: 'open' | 'close', value: string) => {
     setScheduleInputs(prev => ({
       ...prev,
-      [prev[groupId] ? groupId : '']: {
+      [groupId]: {
         ...prev[groupId],
         [type]: value
       }
@@ -207,12 +240,14 @@ export default function Broadcast({
         const mode = groupModes[group.id] || 'global';
         const screensInGroup = availableScreens.filter(s => s.group_id === group.id);
         
-        // Extraction sécurisée des dimensions de la matrice
         const [formatRows, formatCols] = group.format.split('x').map(Number);
         
         const sourceGroupId = targetGroupIds[0];
         const schedule = scheduleInputs[sourceGroupId] || { open: '08:00', close: '22:00' };
-        const restaurantAudioUrl = (attributionInputs[`${sourceGroupId}-restaurant-audio`] || '').trim();
+        
+        // SÉCURISÉ : Transformation automatique du lien audio au cas où c'est un lien Dropbox ou Drive brut
+        const rawAudioUrl = (attributionInputs[`${sourceGroupId}-restaurant-audio`] || '').trim();
+        const restaurantAudioUrl = transformStorageUrl(rawAudioUrl);
 
         promises.push(
           sbClient.from('groups')
@@ -225,7 +260,6 @@ export default function Broadcast({
           
           screensInGroup.forEach(s => {
             const isFirstScreen = s.pos_x === 0 && s.pos_y === 0;
-            // SÉCURISÉ : On force l'envoi de la géométrie de découpe au bon endroit dans Supabase
             promises.push(
               sbClient.from('screens_config')
                 .update({ 
@@ -245,7 +279,6 @@ export default function Broadcast({
             const localVideoUrl = (attributionInputs[videoKey] || '').trim();
             const isFirstScreen = s.pos_x === 0 && s.pos_y === 0;
             
-            // SÉCURISÉ : On applique aussi les dimensions géométriques pour le mode d'affichage séparé
             promises.push(
               sbClient.from('screens_config')
                 .update({ 
@@ -600,6 +633,7 @@ export default function Broadcast({
                     const count = allVideos.filter(v => v.album_id === album.id).length;
                     return (
                       <button
+                        network-id={album.id}
                         key={album.id}
                         type="button"
                         onClick={() => setOpenedAlbumId(album.id)}
