@@ -58,6 +58,16 @@ export default function Broadcast({
   const [videoPickerTarget, setVideoPickerTarget] = useState<string | null>(null);
   const [openedAlbumId, setOpenedAlbumId] = useState<string | null>(null);
 
+  // Activation sélective des sections pour la sauvegarde ciblé
+  const [activeEdits, setActiveEdits] = useState<Record<string, boolean>>({
+    schedule: false,
+    audio: false,
+    video: false
+  });
+
+  // Gestion du mode d'insertion vidéo (bibliothèque ou lien manuel) par clé d'attribution
+  const [videoModes, setVideoModes] = useState<Record<string, 'library' | 'manual'>>({});
+
   // =========================================================
   // 🛡️ AUTOMATE DE SÉCURISATION POUR LES LIENS AUDIO MUTUALISÉS
   // =========================================================
@@ -177,7 +187,6 @@ export default function Broadcast({
     }));
   };
 
-  // CORRIGÉ : Nettoyage du bug de ciblage de l'identifiant du groupe
   const updateScheduleInput = (groupId: string, type: 'open' | 'close', value: string) => {
     setScheduleInputs(prev => ({
       ...prev,
@@ -229,6 +238,11 @@ export default function Broadcast({
     const targetGroupIds = Object.keys(selectedGroups).filter(id => selectedGroups[id]);
     if (isSaving || targetGroupIds.length === 0) return;
 
+    if (!activeEdits.schedule && !activeEdits.audio && !activeEdits.video) {
+      alert("Veuillez cocher au moins une section à modifier avant d'enregistrer.");
+      return;
+    }
+
     setIsSaving(true);
     try {
       const promises: Promise<any>[] = [];
@@ -239,56 +253,45 @@ export default function Broadcast({
 
         const mode = groupModes[group.id] || 'global';
         const screensInGroup = availableScreens.filter(s => s.group_id === group.id);
-        
         const [formatRows, formatCols] = group.format.split('x').map(Number);
-        
         const sourceGroupId = targetGroupIds[0];
-        const schedule = scheduleInputs[sourceGroupId] || { open: '08:00', close: '22:00' };
-        
-        // SÉCURISÉ : Transformation automatique du lien audio au cas où c'est un lien Dropbox ou Drive brut
-        const rawAudioUrl = (attributionInputs[`${sourceGroupId}-restaurant-audio`] || '').trim();
-        const restaurantAudioUrl = transformStorageUrl(rawAudioUrl);
 
-        promises.push(
-          sbClient.from('groups')
-            .update({ open_time: schedule.open, close_time: schedule.close })
-            .eq('id', group.id)
-        );
+        if (activeEdits.schedule) {
+          const schedule = scheduleInputs[sourceGroupId] || { open: '08:00', close: '22:00' };
+          promises.push(
+            sbClient.from('groups')
+              .update({ open_time: schedule.open, close_time: schedule.close })
+              .eq('id', group.id)
+          );
+        }
 
-        if (mode === 'global') {
+        if (activeEdits.video || activeEdits.audio) {
+          const rawAudioUrl = (attributionInputs[`${sourceGroupId}-restaurant-audio`] || '').trim();
+          const restaurantAudioUrl = transformStorageUrl(rawAudioUrl);
           const globalVideoUrl = (attributionInputs[`${sourceGroupId}-global-video`] || '').trim();
-          
+
           screensInGroup.forEach(s => {
             const isFirstScreen = s.pos_x === 0 && s.pos_y === 0;
-            promises.push(
-              sbClient.from('screens_config')
-                .update({ 
-                  video_url: globalVideoUrl,
-                  audio_url: isFirstScreen ? restaurantAudioUrl : '',
-                  total_cols: formatCols,
-                  total_rows: formatRows,
-                  pos_x: s.pos_x,
-                  pos_y: s.pos_y
-                })
-                .eq('id', s.id)
-            );
-          });
-        } else {
-          screensInGroup.forEach(s => {
             const videoKey = targetGroupIds.length === 1 ? `${s.id}-video` : `${screensInGroup[0]?.id}-video`;
             const localVideoUrl = (attributionInputs[videoKey] || '').trim();
-            const isFirstScreen = s.pos_x === 0 && s.pos_y === 0;
-            
+
+            const screenPayload: Record<string, any> = {
+              total_cols: formatCols,
+              total_rows: formatRows,
+              pos_x: s.pos_x,
+              pos_y: s.pos_y
+            };
+
+            if (activeEdits.video) {
+              screenPayload.video_url = mode === 'global' ? globalVideoUrl : localVideoUrl;
+            }
+            if (activeEdits.audio) {
+              screenPayload.audio_url = isFirstScreen ? restaurantAudioUrl : '';
+            }
+
             promises.push(
               sbClient.from('screens_config')
-                .update({ 
-                  video_url: localVideoUrl,
-                  audio_url: isFirstScreen ? restaurantAudioUrl : '',
-                  total_cols: formatCols,
-                  total_rows: formatRows,
-                  pos_x: s.pos_x,
-                  pos_y: s.pos_y
-                })
+                .update(screenPayload)
                 .eq('id', s.id)
             );
           });
@@ -296,7 +299,7 @@ export default function Broadcast({
       }
 
       await Promise.all(promises);
-      alert("Enregistré ! Vos configurations de découpe sont appliquées.");
+      alert("Enregistré ! Seuls les réglages cochés ont été appliqués.");
     } catch (err) {
       console.error(err);
       alert("Erreur lors de la sauvegarde.");
@@ -332,7 +335,7 @@ export default function Broadcast({
             }`}
           >
             <span className="text-[9px] font-bold opacity-60 tracking-wider">
-              ÉCRAN {slotCounter} {x === 0 && y === 0 ? '🔊' : ''}
+              ÉCRAN {slotCounter} {x === 0 && y === 0 ? '' : ''}
             </span>
             <span className="text-[11px] font-black truncate max-w-full mt-1 tracking-tight">
               {s ? s.id : 'Vide'}
@@ -346,23 +349,54 @@ export default function Broadcast({
     let inputsHtml: React.ReactNode = null;
     if (currentMode === 'global') {
       const currentVideoUrl = attributionInputs[videoKey] || '';
+      const isManual = videoModes[videoKey] === 'manual';
+
       inputsHtml = (
-        <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-1.5">
-          <div className="flex items-center gap-1.5 px-0.5">
-            <span className="text-xs">🎬</span>
-            <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo</span>
+        <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
+          <div className="flex items-center justify-between px-0.5">
+            <div className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={activeEdits.video}
+                onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
+                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+              />
+              <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo</span>
+            </div>
+            {/* Beau switch visuel à icônes */}
+            <button
+              type="button"
+              onClick={() => setVideoModes(prev => ({ ...prev, [videoKey]: isManual ? 'library' : 'manual' }))}
+              className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
+            >
+              <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
+              <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
+            </button>
           </div>
-          <button
-            type="button"
-            disabled={isSaving}
-            onClick={() => openVideoPicker(videoKey)}
-            className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
-          >
-            <span className="truncate flex-1">
-              {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir une vidéo..."}
-            </span>
-            <span className="text-[#ff751f] text-sm font-black">📁</span>
-          </button>
+          <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
+            {isManual ? (
+              <input
+                type="text"
+                disabled={isSaving || !activeEdits.video}
+                value={currentVideoUrl}
+                onChange={(e) => updateAttributionInput(videoKey, e.target.value)}
+                placeholder="Coller l'URL de votre vidéo ici..."
+                className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
+              />
+            ) : (
+              <button
+                type="button"
+                disabled={isSaving || !activeEdits.video}
+                onClick={() => openVideoPicker(videoKey)}
+                className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
+              >
+                <span className="truncate flex-1">
+                  {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir une vidéo..."}
+                </span>
+                <span className="text-[#ff751f] text-sm font-black">🖥</span>
+              </button>
+            )}
+          </div>
         </div>
       );
     } else {
@@ -374,23 +408,54 @@ export default function Broadcast({
           if (s) {
             const localVideoKey = `${s.id}-video`;
             const currentVideoUrl = attributionInputs[localVideoKey] || '';
+            const isManual = videoModes[localVideoKey] === 'manual';
+
             inputsList.push(
-              <div key={s.id} className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-1.5">
-                <div className="flex items-center gap-1.5 px-0.5">
-                  <span className="text-xs">🎬</span>
-                  <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Écran {localCounter}</span>
+              <div key={s.id} className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
+                <div className="flex items-center justify-between px-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      checked={activeEdits.video}
+                      onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
+                      className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+                    />
+                    <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Écran {localCounter}</span>
+                  </div>
+                  {/* Beau switch visuel à icônes */}
+                  <button
+                    type="button"
+                    onClick={() => setVideoModes(prev => ({ ...prev, [localVideoKey]: isManual ? 'library' : 'manual' }))}
+                    className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
+                  >
+                    <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
+                    <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  disabled={isSaving}
-                  onClick={() => openVideoPicker(localVideoKey)}
-                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
-                >
-                  <span className="truncate flex-1">
-                    {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir une vidéo..."}
-                  </span>
-                  <span className="text-[#ff751f] text-sm font-black">📁</span>
-                </button>
+                <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
+                  {isManual ? (
+                    <input
+                      type="text"
+                      disabled={isSaving || !activeEdits.video}
+                      value={currentVideoUrl}
+                      onChange={(e) => updateAttributionInput(localVideoKey, e.target.value)}
+                      placeholder="Coller l'URL de votre vidéo ici..."
+                      className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={isSaving || !activeEdits.video}
+                      onClick={() => openVideoPicker(localVideoKey)}
+                      className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
+                    >
+                      <span className="truncate flex-1">
+                        {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir une vidéo..."}
+                      </span>
+                      <span className="text-[#ff751f] text-sm font-black">🖥</span>
+                    </button>
+                  )}
+                </div>
               </div>
             );
           }
@@ -423,48 +488,66 @@ export default function Broadcast({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1 px-0.5">
-                <span className="text-[11px]">☀️</span>
-                <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Allumage</span>
-              </div>
+          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-between space-y-2">
+            <div className="flex items-center gap-1.5 px-0.5">
               <input
-                type="time"
-                disabled={isSaving}
-                value={scheduleInputs[group.id]?.open || '08:00'}
-                onChange={(e) => updateScheduleInput(group.id, 'open', e.target.value)}
-                className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner disabled:opacity-50"
+                type="checkbox"
+                checked={activeEdits.schedule}
+                onChange={(e) => setActiveEdits(prev => ({ ...prev, schedule: e.target.checked }))}
+                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
               />
+              <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Horaires</span>
             </div>
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1 px-0.5">
-                <span className="text-[11px]">🌙</span>
-                <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Extinction</span>
+            <div className={`grid grid-cols-2 gap-4 transition-opacity duration-200 ${!activeEdits.schedule ? 'opacity-40 pointer-events-none' : ''}`}>
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1 px-0.5">
+                  <span className="text-[11px]">☀️</span>
+                  <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Allumage</span>
+                </div>
+                <input
+                  type="time"
+                  disabled={isSaving || !activeEdits.schedule}
+                  value={scheduleInputs[group.id]?.open || '08:00'}
+                  onChange={(e) => updateScheduleInput(group.id, 'open', e.target.value)}
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner disabled:opacity-50"
+                />
               </div>
-              <input
-                type="time"
-                disabled={isSaving}
-                value={scheduleInputs[group.id]?.close || '22:00'}
-                onChange={(e) => updateScheduleInput(group.id, 'close', e.target.value)}
-                className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner disabled:opacity-50"
-              />
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1 px-0.5">
+                  <span className="text-[11px]">🌙</span>
+                  <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Extinction</span>
+                </div>
+                <input
+                  type="time"
+                  disabled={isSaving || !activeEdits.schedule}
+                  value={scheduleInputs[group.id]?.close || '22:00'}
+                  onChange={(e) => updateScheduleInput(group.id, 'close', e.target.value)}
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner disabled:opacity-50"
+                />
+              </div>
             </div>
           </div>
 
-          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-center space-y-1.5">
+          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-center space-y-2">
             <div className="flex items-center gap-1.5 px-0.5">
-              <span className="text-[11px]">🎵</span>
-              <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Musique</span>
+              <input
+                type="checkbox"
+                checked={activeEdits.audio}
+                onChange={(e) => setActiveEdits(prev => ({ ...prev, audio: e.target.checked }))}
+                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+              />
+              <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Audio</span>
             </div>
-            <input
-              type="text"
-              disabled={isSaving}
-              value={attributionInputs[audioKey] || ''}
-              onChange={(e) => updateAttributionInput(audioKey, e.target.value)}
-              placeholder="Lien..."
-              className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 font-mono outline-none shadow-inner font-semibold"
-            />
+            <div className={`transition-opacity duration-200 ${!activeEdits.audio ? 'opacity-40 pointer-events-none' : ''}`}>
+              <input
+                type="text"
+                disabled={isSaving || !activeEdits.audio}
+                value={attributionInputs[audioKey] || ''}
+                onChange={(e) => updateAttributionInput(audioKey, e.target.value)}
+                placeholder="Lien..."
+                className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 font-mono outline-none shadow-inner font-semibold"
+              />
+            </div>
           </div>
         </div>
 
@@ -479,6 +562,7 @@ export default function Broadcast({
     const audioKey = `${baseGroupId}-restaurant-audio`;
     const videoKey = `${baseGroupId}-global-video`;
     const currentVideoUrl = attributionInputs[videoKey] || '';
+    const isManual = videoModes[videoKey] === 'manual';
 
     workspaceContent = (
       <div className="glass-card p-6 space-y-5 shadow-xl border-2 border-dashed border-[#ff751f]/30 bg-[#ff751f]/5">
@@ -488,67 +572,114 @@ export default function Broadcast({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1 px-0.5">
-                <span className="text-[11px]">☀️</span>
-                <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Allumage</span>
-              </div>
+          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-between space-y-2">
+            <div className="flex items-center gap-1.5 px-0.5">
               <input
-                type="time"
-                disabled={isSaving}
-                value={scheduleInputs[baseGroupId]?.open || '08:00'}
-                onChange={(e) => updateScheduleInput(baseGroupId, 'open', e.target.value)}
-                className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
+                type="checkbox"
+                checked={activeEdits.schedule}
+                onChange={(e) => setActiveEdits(prev => ({ ...prev, schedule: e.target.checked }))}
+                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
               />
+              <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Modifier Horaires Communs</span>
             </div>
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1 px-0.5">
-                <span className="text-[11px]">🌙</span>
-                <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Extinction</span>
+            <div className={`grid grid-cols-2 gap-4 transition-opacity duration-200 ${!activeEdits.schedule ? 'opacity-40 pointer-events-none' : ''}`}>
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1 px-0.5">
+                  <span className="text-[11px]">☀️</span>
+                  <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Allumage</span>
+                </div>
+                <input
+                  type="time"
+                  disabled={isSaving || !activeEdits.schedule}
+                  value={scheduleInputs[baseGroupId]?.open || '08:00'}
+                  onChange={(e) => updateScheduleInput(baseGroupId, 'open', e.target.value)}
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
+                />
               </div>
-              <input
-                type="time"
-                disabled={isSaving}
-                value={scheduleInputs[baseGroupId]?.close || '22:00'}
-                onChange={(e) => updateScheduleInput(baseGroupId, 'close', e.target.value)}
-                className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
-              />
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1 px-0.5">
+                  <span className="text-[11px]">🌙</span>
+                  <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Extinction</span>
+                </div>
+                <input
+                  type="time"
+                  disabled={isSaving || !activeEdits.schedule}
+                  value={scheduleInputs[baseGroupId]?.close || '22:00'}
+                  onChange={(e) => updateScheduleInput(baseGroupId, 'close', e.target.value)}
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
+                />
+              </div>
             </div>
           </div>
 
-          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-center space-y-1.5">
+          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-center space-y-2">
             <div className="flex items-center gap-1.5 px-0.5">
-              <span className="text-[11px]">🎵</span>
-              <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Musique</span>
+              <input
+                type="checkbox"
+                checked={activeEdits.audio}
+                onChange={(e) => setActiveEdits(prev => ({ ...prev, audio: e.target.checked }))}
+                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+              />
+              <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Modifier Musique Commune</span>
             </div>
-            <input
-              type="text"
-              disabled={isSaving}
-              value={attributionInputs[audioKey] || ''}
-              onChange={(e) => updateAttributionInput(audioKey, e.target.value)}
-              placeholder="Appliquer à tous..."
-              className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 font-mono outline-none shadow-inner font-semibold"
-            />
+            <div className={`transition-opacity duration-200 ${!activeEdits.audio ? 'opacity-40 pointer-events-none' : ''}`}>
+              <input
+                type="text"
+                disabled={isSaving || !activeEdits.audio}
+                value={attributionInputs[audioKey] || ''}
+                onChange={(e) => updateAttributionInput(audioKey, e.target.value)}
+                placeholder="Appliquer à tous..."
+                className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 font-mono outline-none shadow-inner font-semibold"
+              />
+            </div>
           </div>
         </div>
 
-        <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-1.5">
-          <div className="flex items-center gap-1.5 px-0.5">
-            <span className="text-xs">🎬</span>
-            <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo commune</span>
+        <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
+          <div className="flex items-center justify-between px-0.5">
+            <div className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={activeEdits.video}
+                onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
+                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+              />
+              <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo Commune</span>
+            </div>
+            {/* Beau switch visuel à icônes */}
+            <button
+              type="button"
+              onClick={() => setVideoModes(prev => ({ ...prev, [videoKey]: isManual ? 'library' : 'manual' }))}
+              className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
+            >
+              <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
+              <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
+            </button>
           </div>
-          <button
-            type="button"
-            disabled={isSaving}
-            onClick={() => openVideoPicker(videoKey)}
-            className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
-          >
-            <span className="truncate flex-1">
-              {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir la vidéo commune..."}
-            </span>
-            <span className="text-[#ff751f] text-sm font-black">📁</span>
-          </button>
+          <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
+            {isManual ? (
+              <input
+                type="text"
+                disabled={isSaving || !activeEdits.video}
+                value={currentVideoUrl}
+                onChange={(e) => updateAttributionInput(videoKey, e.target.value)}
+                placeholder="Coller l'URL de votre vidéo commune ici..."
+                className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
+              />
+            ) : (
+              <button
+                type="button"
+                disabled={isSaving || !activeEdits.video}
+                onClick={() => openVideoPicker(videoKey)}
+                className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
+              >
+                <span className="truncate flex-1">
+                  {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir la vidéo commune..."}
+                </span>
+                <span className="text-[#ff751f] text-sm font-black">🖥</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -633,13 +764,13 @@ export default function Broadcast({
                     const count = allVideos.filter(v => v.album_id === album.id).length;
                     return (
                       <button
-                        network-id={album.id}
+                        data-network-id={album.id}
                         key={album.id}
                         type="button"
                         onClick={() => setOpenedAlbumId(album.id)}
                         className="w-full bg-[#faf6f0]/60 hover:bg-[#ff751f]/5 p-3.5 rounded-2xl border border-[#e3dad0] hover:border-[#ff751f]/30 font-bold text-xs text-[#b74b1b] text-left flex justify-between items-center transition-all"
                       >
-                        <span className="truncate">📁 {album.name}</span>
+                        <span className="truncate">🖥 {album.name}</span>
                         <span className="text-[10px] bg-white border border-[#e3dad0] text-[#ff751f] px-2 py-0.5 rounded-full font-black">
                           {count}
                         </span>
