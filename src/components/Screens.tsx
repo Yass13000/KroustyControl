@@ -494,7 +494,15 @@ export default function Screens({
         ) : (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
             {filteredGroups.map(group => {
+              // Calcul pro du nombre total d'écrans allumés à travers toutes les configurations du resto
               const configsInGroup = localConfigurations.filter(c => c.group_id === group.id);
+              const configIds = configsInGroup.map(c => c.id);
+              const screensInGroup = localScreens.filter(s => s.configuration_id && configIds.includes(s.configuration_id));
+              
+              let groupOnlineCount = 0;
+              screensInGroup.forEach(s => {
+                if (s && isScreenOnline(s.last_ping)) groupOnlineCount++;
+              });
 
               return (
                 <div
@@ -507,16 +515,19 @@ export default function Screens({
                   style={group.image_url ? { backgroundImage: `url(${group.image_url})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}}
                 >
                   <div className="absolute inset-0 bg-black/35 group-hover:bg-black/45 transition-colors z-0" />
+                  
                   <div className="z-10 w-full flex-1 flex flex-col justify-center items-center text-center">
                     <h3 className="text-sm sm:text-base font-black text-[#ff751f] uppercase tracking-wide text-center max-w-full break-words line-clamp-2 px-1 drop-shadow-[0_1.5px_2px_rgba(0,0,0,0.8)]">
                       {group.name}
                     </h3>
                   </div>
-                  <div className="z-10 w-full flex justify-between items-center mt-1.5 pt-2 border-t border-white/15">
-                    <span className="text-[10px] font-bold text-white/80 uppercase">Configurations</span>
-                    <span className="text-xs font-black bg-black/40 border border-white/10 text-[#ff751f] px-2.5 py-1 rounded-md tracking-wider font-mono shadow-sm">
-                      {configsInGroup.length} active(s)
-                    </span>
+
+                  {/* AJUSTEMENT PRO : Zéro texte, uniquement le compteur fluide et la lumière verte clignotante */}
+                  <div className="z-10 w-full flex justify-center items-center mt-1.5 pt-2 border-t border-white/15">
+                    <div className="flex items-center gap-1.5 bg-black/40 border border-white/10 px-3 py-1 rounded-xl shadow-sm">
+                      <span className="h-2 w-2 rounded-full bg-[#34C759] pulse-green"></span>
+                      <span className="text-xs font-black text-white font-mono tracking-tight">{groupOnlineCount}</span>
+                    </div>
                   </div>
                 </div>
               );
@@ -569,7 +580,6 @@ export default function Screens({
                       className="flex-1 bg-white border border-[#e3dad0] rounded-xl px-3 text-xs font-semibold outline-none text-[#b74b1b] h-9"
                     />
                     
-                    {/* CORRECTION DU SÉCURE : Remplacement pro de setNewGroupFormat par setNewConfigFormat */}
                     <select
                       value={newConfigFormat}
                       onChange={(e) => setNewConfigFormat(e.target.value)}
