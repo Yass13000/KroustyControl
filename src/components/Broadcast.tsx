@@ -62,7 +62,9 @@ export default function Broadcast({
   const [selectedConfigs, setSelectedConfigs] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
 
-  // États synchronisés en temps réel
+  const [formatFilter, setFormatFilter] = useState<string>('');
+  const [restaurantSearch, setRestaurantSearch] = useState<string>('');
+
   const [localGroups, setLocalGroups] = useState<Group[]>(availableGroups);
   const [localConfigurations, setLocalConfigurations] = useState<Configuration[]>([]);
   const [localScreens, setLocalScreens] = useState<Screen[]>(availableScreens);
@@ -80,9 +82,6 @@ export default function Broadcast({
 
   const [videoModes, setVideoModes] = useState<Record<string, 'library' | 'manual'>>({});
 
-  // =========================================================
-  // 🛡️ AUTOMATE DE NETTOYAGE DES URLS NETTES (PRO)
-  // =========================================================
   const transformStorageUrl = (url: string): string => {
     if (!url) return '';
     if (url.includes(',')) {
@@ -112,9 +111,6 @@ export default function Broadcast({
     return cleanUrl;
   };
 
-  // =========================================================
-  // ⚡ PIPELINE DE SYNCHRONISATION LIVE (REALTIME)
-  // =========================================================
   const refreshAllData = useCallback(async () => {
     try {
       const { data: grp } = await sbClient.from('groups').select('*').order('name', { ascending: true });
@@ -125,7 +121,7 @@ export default function Broadcast({
       if (conf) setLocalConfigurations(conf);
       if (scr) setLocalScreens(scr);
     } catch (err) {
-      console.error("Erreur de rafraîchissement Realtime Broadcast :", err);
+      console.error(err);
     }
   }, [sbClient]);
 
@@ -144,7 +140,6 @@ export default function Broadcast({
     };
   }, [sbClient, refreshAllData]);
 
-  // Charger la bibliothèque multimédia standard
   useEffect(() => {
     const loadLibraryData = async () => {
       const { data: rawAlbums } = await sbClient.from('albums').select('*').order('name', { ascending: true });
@@ -155,14 +150,6 @@ export default function Broadcast({
     if (sbClient) loadLibraryData();
   }, [sbClient]);
 
-  // Sélectionner la première configuration disponible par défaut à l'ouverture
-  useEffect(() => {
-    if (localConfigurations.length > 0 && Object.keys(selectedConfigs).length === 0) {
-      setSelectedConfigs({ [localConfigurations[0].id]: true });
-    }
-  }, [localConfigurations]);
-
-  // Pré-remplissage intelligent des attributions sans écrasement de saisie en cours
   useEffect(() => {
     const initialSchedules = { ...scheduleInputs };
     const initialAttributions = { ...attributionInputs };
@@ -278,9 +265,6 @@ export default function Broadcast({
     setOpenedAlbumId(null);
   };
 
-  // =========================================================
-  // ⚡ DEPLOYEUR GLOBAL MULTI-CONFIGURATION PAR BATCH (LIVE)
-  // =========================================================
   const applyConfig = async () => {
     const targetConfigIds = Object.keys(selectedConfigs).filter(id => selectedConfigs[id]);
     if (isSaving || targetConfigIds.length === 0) return;
@@ -295,23 +279,23 @@ export default function Broadcast({
       const promises: Promise<any>[] = [];
       const sourceConfigId = targetConfigIds[0];
 
-      // 1. ÉTAPE DE DÉPLOIEMENT DES HORAIRES SUR LES RESTAURANTS PARENTS CONCERNÉS
       if (activeEdits.schedule) {
         const schedule = scheduleInputs[sourceConfigId] || { open: '08:00', close: '22:00' };
         const parentGroupIds = targetConfigIds
           .map(cid => localConfigurations.find(c => c.id === cid)?.group_id)
           .filter((gid): gid is string => !!gid);
 
-        if (parentGroupIds.length > 0) {
+        const uniqueGroupIds = Array.from(new Set(parentGroupIds));
+
+        if (uniqueGroupIds.length > 0) {
           promises.push(
             sbClient.from('groups')
               .update({ open_time: schedule.open, close_time: schedule.close })
-              .in('id', parentGroupIds)
+              .in('id', uniqueGroupIds)
           );
         }
       }
 
-      // 2. ÉTAPE DE CONFIGURATION MULTI-DALLES DES ÉCRANS DE CHAQUE CONFIGURATION
       if (activeEdits.video || activeEdits.audio) {
         const rawAudioUrl = (attributionInputs[`${sourceConfigId}-restaurant-audio`] || '').trim();
         const restaurantAudioUrl = transformStorageUrl(rawAudioUrl);
@@ -326,7 +310,6 @@ export default function Broadcast({
           const [formatRows, formatCols] = config.format.split('x').map(Number);
 
           if (targetConfigIds.length === 1 && mode === 'per-screen') {
-            // Attribution par dalles individuelles sur une configuration unique
             screensInConfig.forEach(s => {
               const isFirstScreen = s.pos_x === 0 && s.pos_y === 0;
               const localVideoKey = `${s.id}-video`;
@@ -346,7 +329,6 @@ export default function Broadcast({
               );
             });
           } else {
-            // Déploiement global unifié (Idéal pour envois groupés multi-restaurants)
             const masterScreenIds: string[] = [];
             const slaveScreenIds: string[] = [];
 
@@ -401,6 +383,15 @@ export default function Broadcast({
       setIsSaving(false);
     }
   };
+
+  const filteredConfigs = localConfigurations.filter(c => {
+    const parentGroup = localGroups.find(g => g.id === c.group_id);
+    const matchFormat = formatFilter ? c.format === formatFilter : true;
+    const matchSearch = restaurantSearch ? parentGroup?.name.toLowerCase().includes(restaurantSearch.toLowerCase()) : true;
+    return matchFormat && matchSearch;
+  });
+
+  const showResults = formatFilter || restaurantSearch;
 
   const targetConfigIds = Object.keys(selectedConfigs).filter(id => selectedConfigs[id]);
   const selectedCount = targetConfigIds.length;
@@ -782,64 +773,68 @@ export default function Broadcast({
         </div>
       </div>
     );
-  } else {
-    workspaceContent = (
-      <div className="glass-card p-12 text-center text-xs text-[#7c6258] font-bold border border-dashed border-[#e3dad0] bg-[#faf6f0]/10">
-        📍 Sélectionnez une ou plusieurs configurations pour commencer à diffuser.
-      </div>
-    );
   }
 
   return (
     <div className="space-y-5 page-content">
       {localGroups.length === 0 ? (
         <div className="glass-card p-8 text-center text-xs text-[#7c6258] border border-dashed border-[#e3dad0]">
-          Aucun établissement créé.
         </div>
       ) : (
         <div className="space-y-5">
-          {/* SÉLECTEUR DE CONFIGURATIONS GROUPÉES PAR RESTAURANT PARENT */}
           <div className="glass-card p-5 space-y-4 shadow-md bg-[#faf6f0]/30">
-            <div className="text-xs font-black text-[#b74b1b] uppercase tracking-wider mb-1">Choix des configurations de dalles</div>
-            <div className="space-y-3.5">
-              {localGroups.map(group => {
-                const configs = localConfigurations.filter(c => c.group_id === group.id);
-                if (configs.length === 0) return null;
-                
-                return (
-                  <div key={group.id} className="space-y-1.5 border-b border-[#e3dad0]/30 pb-3 last:border-none last:pb-0">
-                    <div className="text-[10px] font-extrabold text-[#b74b1b] uppercase px-1 tracking-wider">{group.name}</div>
-                    <div className="flex flex-wrap gap-2">
-                      {configs.map(config => {
-                        const isChecked = !!selectedConfigs[config.id];
-                        return (
-                          <button
-                            key={config.id}
-                            type="button"
-                            disabled={isSaving}
-                            onClick={() => toggleConfigSelection(config.id, config.format)}
-                            className={`px-3 py-2.5 rounded-xl border text-[11px] font-bold transition-all flex items-center gap-2 active:scale-95 ${
-                              isChecked 
-                                ? 'bg-[#ff751f]/10 border-[#ff751f]/40 text-[#ff751f] shadow-sm font-black' 
-                                : 'bg-white border-[#e3dad0] text-[#7c6258] opacity-80 hover:opacity-100'
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              readOnly
-                              checked={isChecked}
-                              className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f] pointer-events-none"
-                            />
-                            <span>{config.name}</span>
-                            <span className="text-[9px] opacity-50 font-normal">({config.format})</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <select
+              value={formatFilter}
+              onChange={(e) => setFormatFilter(e.target.value)}
+              className="w-full bg-white border border-[#e3dad0] rounded-2xl p-4 text-xs font-black text-[#b74b1b] outline-none shadow-inner cursor-pointer"
+            >
+              <option value="">1. Filtrer par format d'écran...</option>
+              <option value="1x1">Format 1x1</option>
+              <option value="1x2">Format 1x2</option>
+              <option value="1x3">Format 1x3</option>
+              <option value="1x4">Format 1x4</option>
+              <option value="2x2">Format 2x2</option>
+            </select>
+
+            <input
+              type="text"
+              value={restaurantSearch}
+              onChange={(e) => setRestaurantSearch(e.target.value)}
+              placeholder="2. Rechercher par nom de restaurant..."
+              className="w-full bg-white border border-[#e3dad0] rounded-2xl p-4 text-xs placeholder-[#e3dad0]/60 outline-none font-semibold shadow-inner focus:ring-1 focus:ring-[#ff751f]/10"
+            />
+
+            {showResults && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-[45vh] overflow-y-auto pr-1 mt-4">
+                {filteredConfigs.map(config => {
+                  const parentGroup = localGroups.find(g => g.id === config.group_id);
+                  const isChecked = !!selectedConfigs[config.id];
+                  return (
+                    <button
+                      key={config.id}
+                      type="button"
+                      onClick={() => toggleConfigSelection(config.id, config.format)}
+                      className={`px-3 py-2.5 rounded-xl border text-[11px] font-bold transition-all flex items-center gap-3 text-left active:scale-95 ${
+                        isChecked 
+                          ? 'bg-[#ff751f]/10 border-[#ff751f]/40 text-[#ff751f] shadow-sm font-black' 
+                          : 'bg-white border-[#e3dad0] text-[#7c6258] opacity-90 hover:opacity-100'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        readOnly
+                        checked={isChecked}
+                        className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f] pointer-events-none flex-shrink-0"
+                      />
+                      <div className="truncate">
+                        <p className="truncate font-bold text-[#b74b1b] tracking-tight">{parentGroup?.name}</p>
+                        <p className="text-[9px] opacity-70 font-mono font-normal mt-0.5">{config.name} ({config.format})</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {workspaceContent}
@@ -932,7 +927,7 @@ export default function Broadcast({
               isSaving ? 'opacity-50 cursor-not-allowed scale-100' : 'hover:opacity-95 hover:scale-[1.01] active:scale-[0.99]'
             }`}
           >
-            {isSaving ? "Enregistrement..." : "Enregistrer les changements"}
+            {isSaving ? "..." : "Enregistrer"}
           </button>
         </div>
       )}
