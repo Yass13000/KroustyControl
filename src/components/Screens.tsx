@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 interface Screen {
   id: string;
-  group_id: string | null;
+  configuration_id: string | null;
   last_ping: string | null;
   pos_x: number;
   pos_y: number;
+  total_cols: number;
+  total_rows: number;
   video_url: string | null;
   audio_url: string | null;
 }
@@ -13,8 +15,14 @@ interface Screen {
 interface Group {
   id: string;
   name: string;
-  format: string;
   image_url: string | null;
+}
+
+interface Configuration {
+  id: string;
+  group_id: string;
+  name: string;
+  format: string;
 }
 
 interface ScreensProps {
@@ -35,33 +43,80 @@ export default function Screens({
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
-  const [newGroupFormat, setNewGroupFormat] = useState('1x1');
   const [newGroupImageUrl, setNewGroupImageUrl] = useState(''); 
   const [uploadingImage, setUploadingImage] = useState(false); 
   const [currentFilter, setCurrentFilter] = useState<'all' | 'unassigned'>('all');
 
-  const [b2DownloadToken, setB2DownloadToken] = useState('');
+  // États synchronisés en temps réel via Supabase Realtime
+  const [localGroups, setLocalGroups] = useState<Group[]>(availableGroups);
+  const [localConfigurations, setLocalConfigurations] = useState<Configuration[]>([]);
+  const [localScreens, setLocalScreens] = useState<Screen[]>(availableScreens);
 
-  const [selectedGroupForConfig, setSelectedGroupForConfig] = useState<Group | null>(null);
+  // Gestion des configurations du restaurant sélectionné
+  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
+  const [selectedConfig, setSelectedConfig] = useState<Configuration | null>(null);
+  const [newConfigName, setNewConfigName] = useState('');
+  const [newConfigFormat, setNewConfigFormat] = useState('1x1');
+
+  const [b2DownloadToken, setB2DownloadToken] = useState('');
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [assignTarget, setAssignTarget] = useState<{
-    groupId: string;
+    configId: string;
     format: string;
     x: number;
     y: number;
     displayNum: number;
   } | null>(null);
 
-  const now = new Date().getTime();
+  const [now, setNow] = useState(new Date().getTime());
 
   const B2_KEY_ID = "00382696474bd910000000002"; 
   const B2_APPLICATION_KEY = "K003nlIsqBOZ/HM0VmU1MafcE62+rYY";
   const B2_BUCKET_ID = "a872d62946a4a7149bed0911";
 
+  // Rafraîchissement du timer interne pour la détection d'état à la seconde
+  useEffect(() => {
+    const interval = setInterval(() => setNow(new Date().getTime()), 5000);
+    return () => clearInterval(interval);
+  }, []);
+
   const isScreenOnline = (lastPing: string | null) => {
     if (!lastPing) return false;
     return (now - new Date(lastPing).getTime()) / 1000 < 45;
   };
+
+  // =========================================================
+  // ⚡ AUTOMATE DE SYNCHRONISATION INSTANTANÉE (REALTIME)
+  // =========================================================
+  const refreshAllData = useCallback(async () => {
+    try {
+      const { data: grp } = await sbClient.from('groups').select('*').order('name', { ascending: true });
+      const { data: conf } = await sbClient.from('configurations').select('*').order('name', { ascending: true });
+      const { data: scr } = await sbClient.from('screens_config').select('*').order('id', { ascending: true });
+      
+      if (grp) setLocalGroups(grp);
+      if (conf) setLocalConfigurations(conf);
+      if (scr) setLocalScreens(scr);
+    } catch (err) {
+      console.error("Erreur d'interrogation du cache realtime :", err);
+    }
+  }, [sbClient]);
+
+  useEffect(() => {
+    refreshAllData();
+
+    // Souscription globale aux événements Postgres (Insert, Update, Delete)
+    const databaseChannel = sbClient
+      .channel('table-db-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'groups' }, () => refreshAllData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'configurations' }, () => refreshAllData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'screens_config' }, () => refreshAllData())
+      .subscribe();
+
+    return () => {
+      sbClient.removeChannel(databaseChannel);
+    };
+  }, [sbClient, refreshAllData]);
 
   const toggleCreateForm = () => {
     setShowCreateForm(prev => !prev);
@@ -140,7 +195,9 @@ export default function Screens({
     try {
       const publicUrl = await uploadRestaurantImage(file, `group-${groupId}`);
       await sbClient.from('groups').update({ image_url: publicUrl }).eq('id', groupId);
-      setSelectedGroupForConfig(prev => prev ? { ...prev, image_url: publicUrl } : null);
+      if (selectedGroup?.id === groupId) {
+        setSelectedGroup(prev => prev ? { ...prev, image_url: publicUrl } : null);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -153,7 +210,6 @@ export default function Screens({
     if (!name) return;
     await sbClient.from('groups').insert([{ 
       name, 
-      format: newGroupFormat,
       image_url: newGroupImageUrl.trim() || null 
     }]);
     setNewGroupName('');
@@ -161,12 +217,34 @@ export default function Screens({
     setShowCreateForm(false);
   };
 
+  const createNewConfiguration = async () => {
+    const name = newConfigName.trim();
+    if (!name || !selectedGroup) return;
+    await sbClient.from('configurations').insert([{
+      group_id: selectedGroup.id,
+      name,
+      format: newConfigFormat
+    }]);
+    setNewConfigName('');
+  };
+
   const deleteGroup = async (groupId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm("Supprimer ce restaurant ?")) {
+    if (confirm("Supprimer ce restaurant ainsi que toutes ses dalles associées ?")) {
       await sbClient.from('groups').delete().eq('id', groupId);
-      if (selectedGroupForConfig?.id === groupId) {
-        setSelectedGroupForConfig(null);
+      if (selectedGroup?.id === groupId) {
+        setSelectedGroup(null);
+        setSelectedConfig(null);
+      }
+    }
+  };
+
+  const deleteConfiguration = async (configId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm("Supprimer cette configuration de dalles ?")) {
+      await sbClient.from('configurations').delete().eq('id', configId);
+      if (selectedConfig?.id === configId) {
+        setSelectedConfig(null);
       }
     }
   };
@@ -177,11 +255,11 @@ export default function Screens({
     }
   };
 
-  const changeGroupFormat = async (groupId: string, nextFormat: string) => {
+  const changeConfigFormat = async (configId: string, nextFormat: string) => {
     try {
-      await sbClient.from('groups').update({ format: nextFormat }).eq('id', groupId);
-      if (selectedGroupForConfig && selectedGroupForConfig.id === groupId) {
-        setSelectedGroupForConfig(prev => prev ? { ...prev, format: nextFormat } : null);
+      await sbClient.from('configurations').update({ format: nextFormat }).eq('id', configId);
+      if (selectedConfig && selectedConfig.id === configId) {
+        setSelectedConfig(prev => prev ? { ...prev, format: nextFormat } : null);
       }
     } catch (err) {
       console.error(err);
@@ -191,7 +269,7 @@ export default function Screens({
   const resetScreen = async (screenId: string) => {
     await sbClient.from('screens_config')
       .update({
-        group_id: null,
+        configuration_id: null,
         total_cols: 1,
         total_rows: 1,
         pos_x: 0,
@@ -202,14 +280,14 @@ export default function Screens({
       .eq('id', screenId);
   };
 
-  const openAssignModal = (groupId: string, format: string, x: number, y: number, displayNum: number) => {
-    setAssignTarget({ groupId, format, x, y, displayNum });
+  const openAssignModal = (configId: string, format: string, x: number, y: number, displayNum: number) => {
+    setAssignTarget({ configId, format, x, y, displayNum });
     setShowAssignModal(true);
   };
 
   const submitAssign = async (screenId: string) => {
     if (!assignTarget) return;
-    const { groupId, format, x, y } = assignTarget;
+    const { configId, format, x, y } = assignTarget;
     const [rows, cols] = format.split('x').map(Number);
     
     setShowAssignModal(false);
@@ -217,7 +295,7 @@ export default function Screens({
 
     await sbClient.from('screens_config')
       .update({
-        group_id: groupId,
+        configuration_id: configId,
         pos_x: x,
         pos_y: y,
         total_cols: cols,
@@ -230,27 +308,24 @@ export default function Screens({
     setCurrentFilter(prev => prev === 'unassigned' ? 'all' : 'unassigned');
   };
 
-  const filteredGroups = (availableGroups || []).filter(g =>
+  const filteredGroups = localGroups.filter(g =>
     g && g.name && g.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const unassignedScreens = (availableScreens || []).filter(s => s && !s.group_id);
+  const unassignedScreens = localScreens.filter(s => s && !s.configuration_id);
 
   let popupGridSlots: React.ReactNode[] = [];
-  let currentConfigGroupInfo: Group | null = null;
-  let screensInActiveConfigGroup: Screen[] = [];
+  let currentActiveConfig = selectedConfig ? localConfigurations.find(c => c.id === selectedConfig.id) || selectedConfig : null;
+  let screensInActiveConfig: Screen[] = currentActiveConfig ? localScreens.filter(s => s.configuration_id === currentActiveConfig?.id) : [];
 
-  if (selectedGroupForConfig) {
-    currentConfigGroupInfo = (availableGroups || []).find(g => g && g.id === selectedGroupForConfig.id) || selectedGroupForConfig;
-    screensInActiveConfigGroup = (availableScreens || []).filter(s => s && s.group_id === currentConfigGroupInfo?.id);
-    
-    const [rows, cols] = currentConfigGroupInfo.format.split('x').map(Number);
+  if (selectedGroup && currentActiveConfig) {
+    const [rows, cols] = currentActiveConfig.format.split('x').map(Number);
     let slotCounter = 1;
 
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
         const currentSlot = slotCounter;
-        const matchedScreen = screensInActiveConfigGroup.find(s => s.pos_x === x && s.pos_y === y);
+        const matchedScreen = screensInActiveConfig.find(s => s.pos_x === x && s.pos_y === y);
         const currentX = x;
         const currentY = y;
 
@@ -260,8 +335,6 @@ export default function Screens({
 
           popupGridSlots.push(
             <div key={matchedScreen.id} className="relative bg-slate-900 border border-white/10 rounded-2xl flex flex-col justify-between h-28 overflow-hidden group/slot">
-              
-              {/* CORRECTION DE SÉCURITÉ : Ne s'affiche que si le token d'authentification B2 est prêt */}
               {matchedScreen.video_url && b2DownloadToken && signedVideoUrl && (
                 <video
                   key={signedVideoUrl} 
@@ -274,9 +347,7 @@ export default function Screens({
                   className="absolute inset-0 w-full h-full object-cover opacity-45 z-0 pointer-events-none"
                 />
               )}
-
               <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-black/70 z-10 pointer-events-none" />
-
               <div className="z-20 p-2 flex flex-col justify-between h-full w-full">
                 <div className="flex justify-between items-center">
                   <span className="text-[8px] font-black text-white/60 font-mono">POS {currentSlot}</span>
@@ -285,12 +356,10 @@ export default function Screens({
                     <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isScreenOnline(matchedScreen.last_ping) ? 'bg-[#34C759] pulse-green' : 'bg-white/20'}`}></div>
                   </div>
                 </div>
-
                 <div className="text-center my-0.5 min-w-0">
                   <p className="font-black text-[10px] text-[#ff751f] truncate drop-shadow">{matchedScreen.id}</p>
                   {fileName && <p className="text-[7px] text-white/50 font-medium truncate px-0.5 mt-0.5 font-mono">{fileName}</p>}
                 </div>
-
                 <button
                   onClick={() => resetScreen(matchedScreen.id)}
                   className="w-full text-center text-[8px] font-black text-white/80 bg-white/10 hover:bg-red-600/80 border border-white/5 py-1 rounded-lg transition-colors uppercase tracking-wider"
@@ -304,7 +373,7 @@ export default function Screens({
           popupGridSlots.push(
             <div
               key={`empty-slot-${y}-${x}`}
-              onClick={() => openAssignModal(currentConfigGroupInfo!.id, currentConfigGroupInfo!.format, currentX, currentY, currentSlot)}
+              onClick={() => openAssignModal(currentActiveConfig!.id, currentActiveConfig!.format, currentX, currentY, currentSlot)}
               className="border border-dashed border-[#e3dad0] hover:border-[#ff751f]/30 bg-[#faf6f0]/30 hover:bg-[#faf6f0]/70 rounded-2xl flex flex-col items-center justify-center h-28 cursor-pointer text-[#7c6258] hover:text-[#ff751f] transition-all p-1 text-center"
             >
               <span className="text-[8px] font-bold text-[#7c6258]/60">POS {currentSlot}</span>
@@ -349,23 +418,11 @@ export default function Screens({
               <input type="file" accept="image/*" onChange={handleCreateImageUpload} className="hidden" />
             </label>
 
-            <select
-              value={newGroupFormat}
-              onChange={(e) => setNewGroupFormat(e.target.value)}
-              className="w-auto px-2 h-10 bg-white border border-[#e3dad0] rounded-xl text-xs font-black text-[#b74b1b] cursor-pointer focus:border-[#ff751f]/50 transition-all text-center outline-none font-mono"
-            >
-              <option value="1x1">1x1</option>
-              <option value="1x2">1x2</option>
-              <option value="1x3">1x3</option>
-              <option value="1x4">1x4</option>
-              <option value="2x2">2x2</option>
-            </select>
-
             <input
               type="text"
               value={newGroupName}
               onChange={(e) => setNewGroupName(e.target.value)}
-              placeholder="Nom du restaurant"
+              placeholder="Nom du nouveau restaurant parent"
               className="flex-1 h-10 bg-white border border-[#e3dad0] rounded-xl p-3 text-xs text-[#b74b1b] placeholder-[#e3dad0] outline-none font-semibold shadow-inner"
             />
           </div>
@@ -437,35 +494,28 @@ export default function Screens({
         ) : (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
             {filteredGroups.map(group => {
-              const screensInGroup = (availableScreens || []).filter(s => s && s.group_id === group.id);
-              let groupOnlineCount = 0;
-              screensInGroup.forEach(s => {
-                if (s && isScreenOnline(s.last_ping)) groupOnlineCount++;
-              });
+              const configsInGroup = localConfigurations.filter(c => c.group_id === group.id);
 
               return (
                 <div
                   key={group.id}
-                  onClick={() => setSelectedGroupForConfig(group)}
+                  onClick={() => {
+                    setSelectedGroup(group);
+                    setSelectedConfig(null); 
+                  }}
                   className="relative border border-[#f2ede4] hover:border-[#ff751f]/50 rounded-3xl p-4 flex flex-col justify-between items-center text-center shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer select-none h-40 overflow-hidden bg-slate-100 group"
                   style={group.image_url ? { backgroundImage: `url(${group.image_url})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}}
                 >
                   <div className="absolute inset-0 bg-black/35 group-hover:bg-black/45 transition-colors z-0" />
-
                   <div className="z-10 w-full flex-1 flex flex-col justify-center items-center text-center">
                     <h3 className="text-sm sm:text-base font-black text-[#ff751f] uppercase tracking-wide text-center max-w-full break-words line-clamp-2 px-1 drop-shadow-[0_1.5px_2px_rgba(0,0,0,0.8)]">
                       {group.name}
                     </h3>
                   </div>
-
                   <div className="z-10 w-full flex justify-between items-center mt-1.5 pt-2 border-t border-white/15">
-                    <div className="flex items-center gap-2 bg-black/40 border border-white/10 px-2.5 py-1 rounded-lg shadow-sm">
-                      <span className="h-2 w-2 rounded-full bg-[#34C759] pulse-green"></span>
-                      <span className="text-xs font-black text-white tracking-tight">{groupOnlineCount}</span>
-                    </div>
-
+                    <span className="text-[10px] font-bold text-white/80 uppercase">Configurations</span>
                     <span className="text-xs font-black bg-black/40 border border-white/10 text-[#ff751f] px-2.5 py-1 rounded-md tracking-wider font-mono shadow-sm">
-                      {group.format}
+                      {configsInGroup.length} active(s)
                     </span>
                   </div>
                 </div>
@@ -475,70 +525,161 @@ export default function Screens({
         )}
       </div>
 
-      {/* POPUP DE CONFIGURATION AVEC INJECTION SYNC */}
-      {selectedGroupForConfig && currentConfigGroupInfo && (
+      {/* POPUP DE MULTI-CONFIGURATION DU RESTAURANT */}
+      {selectedGroup && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white border border-[#f2ede4] w-full max-w-sm rounded-3xl p-4 space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto flex flex-col">
+          <div className="bg-white border border-[#f2ede4] w-full max-w-md rounded-3xl p-5 space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto flex flex-col">
             
             <div className="flex justify-between items-center border-b border-[#faf6f0] pb-3 gap-2">
               <div className="flex items-center gap-2 flex-1 min-w-0">
                 <label className="relative w-10 h-10 rounded-xl border border-dashed border-[#e3dad0] hover:border-[#ff751f]/40 bg-[#faf6f0] flex items-center justify-center cursor-pointer flex-shrink-0 overflow-hidden shadow-inner transition-colors">
                   {uploadingImage ? (
                     <div className="w-3 h-3 border-2 border-[#e3dad0] border-t-[#ff751f] rounded-full animate-spin"></div>
-                  ) : currentConfigGroupInfo.image_url ? (
-                    <img src={currentConfigGroupInfo.image_url} className="w-full h-full object-cover" alt="" />
+                  ) : selectedGroup.image_url ? (
+                    <img src={selectedGroup.image_url} className="w-full h-full object-cover" alt="" />
                   ) : (
                     <img src="/bibliotheque.svg" className="w-5 h-5 object-contain opacity-40" alt="" />
                   )}
-                  <input type="file" accept="image/*" disabled={uploadingImage} onChange={(e) => handlePopupImageChange(e, currentConfigGroupInfo!.id)} className="hidden" />
+                  <input type="file" accept="image/*" disabled={uploadingImage} onChange={(e) => handlePopupImageChange(e, selectedGroup.id)} className="hidden" />
                 </label>
-
-                <select
-                  value={currentConfigGroupInfo.format}
-                  onChange={(e) => changeGroupFormat(currentConfigGroupInfo!.id, e.target.value)}
-                  className="w-auto px-2 h-10 bg-[#faf6f0] border border-[#e3dad0] rounded-xl text-xs font-black text-[#b74b1b] cursor-pointer focus:border-[#ff751f]/50 transition-all text-center outline-none font-mono"
-                >
-                  <option value="1x1">1x1</option>
-                  <option value="1x2">1x2</option>
-                  <option value="1x3">1x3</option>
-                  <option value="1x4">1x4</option>
-                  <option value="2x2">2x2</option>
-                </select>
-
-                <h4 className="text-xs font-black text-[#b74b1b] uppercase truncate ml-1 flex-1">{currentConfigGroupInfo.name}</h4>
+                <h4 className="text-sm font-black text-[#b74b1b] uppercase truncate ml-1 flex-1">{selectedGroup.name}</h4>
               </div>
-              
               <button
-                onClick={() => setSelectedGroupForConfig(null)}
+                onClick={() => {
+                  setSelectedGroup(null);
+                  setSelectedConfig(null);
+                }}
                 className="bg-[#faf6f0] hover:bg-[#e3dad0]/40 text-[#7c6258] font-bold p-2 text-xs rounded-full transition-all flex-shrink-0"
               >
                 ✕
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto py-1">
-              <div 
-                className="grid gap-2" 
-                style={{ gridTemplateColumns: `repeat(${currentConfigGroupInfo.format.split('x').map(Number)[1]}, minmax(0, 1fr))` }}
-              >
-                {popupGridSlots}
-              </div>
-            </div>
+            {!selectedConfig ? (
+              // EXÉCUTION VUE A : Liste des configurations associées
+              <div className="space-y-4 flex-1 flex flex-col min-h-0">
+                <div className="bg-[#faf6f0]/50 border border-[#e3dad0] p-3 rounded-2xl space-y-2">
+                  <div className="text-[10px] font-black text-[#b74b1b] uppercase tracking-wider">Nouvelle Configuration</div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newConfigName}
+                      onChange={(e) => setNewConfigName(e.target.value)}
+                      placeholder="Ex: Menu Midi, Écrans Soir..."
+                      className="flex-1 bg-white border border-[#e3dad0] rounded-xl px-3 text-xs font-semibold outline-none text-[#b74b1b] h-9"
+                    />
+                    
+                    {/* CORRECTION DU SÉCURE : Remplacement pro de setNewGroupFormat par setNewConfigFormat */}
+                    <select
+                      value={newConfigFormat}
+                      onChange={(e) => setNewConfigFormat(e.target.value)}
+                      className="px-2 bg-white border border-[#e3dad0] rounded-xl text-xs font-bold text-[#b74b1b] outline-none"
+                    >
+                      <option value="1x1">1x1</option>
+                      <option value="1x2">1x2</option>
+                      <option value="1x3">1x3</option>
+                      <option value="1x4">1x4</option>
+                      <option value="2x2">2x2</option>
+                    </select>
+                    <button
+                      onClick={createNewConfiguration}
+                      className="bg-[#ff751f] hover:bg-[#b74b1b] text-white font-bold text-xs px-3 rounded-xl transition-all"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
 
-            <div className="flex gap-2 pt-2 border-t border-[#faf6f0]">
-              <button
-                onClick={(e) => deleteGroup(currentConfigGroupInfo!.id, e)}
-                className="w-1/3 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded-xl py-2.5 text-[10px] font-black uppercase tracking-wider transition-all border border-red-200/40"
-              >
-                Supprimer
-              </button>
-              <button
-                onClick={() => setSelectedGroupForConfig(null)}
-                className="w-2/3 bg-gradient-to-r from-[#ff751f] to-[#b74b1b] text-white rounded-xl py-2.5 text-[10px] font-black uppercase tracking-wider shadow-md transition-all text-center"
-              >
-                Appliquer
-              </button>
-            </div>
+                <div className="text-[10px] font-black text-[#7c6258] uppercase tracking-wider px-1">Configurations Disponibles :</div>
+                <div className="overflow-y-auto space-y-2 flex-1 pr-0.5">
+                  {localConfigurations.filter(c => c.group_id === selectedGroup.id).length === 0 ? (
+                    <p className="text-xs text-center text-[#7c6258] italic py-4">Aucune configuration créée pour le moment.</p>
+                  ) : (
+                    localConfigurations.filter(c => c.group_id === selectedGroup.id).map(config => {
+                      const screenCount = localScreens.filter(s => s.configuration_id === config.id).length;
+                      return (
+                        <div
+                          key={config.id}
+                          onClick={() => setSelectedConfig(config)}
+                          className="w-full bg-[#faf6f0]/60 hover:bg-[#ff751f]/5 p-3 rounded-2xl border border-[#e3dad0] hover:border-[#ff751f]/30 flex justify-between items-center transition-all cursor-pointer group/item"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="font-bold text-xs text-[#b74b1b] truncate">{config.name}</p>
+                            <p className="text-[9px] font-mono font-bold text-[#ff751f] mt-0.5">{config.format} • {screenCount} dalle(s) attachée(s)</p>
+                          </div>
+                          <button
+                            onClick={(e) => deleteConfiguration(config.id, e)}
+                            className="text-[10px] p-2 bg-white rounded-xl border border-[#e3dad0] text-red-500 hover:bg-red-500 hover:text-white opacity-0 group-hover/item:opacity-100 transition-all ml-2"
+                          >
+                            🗑
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-[#faf6f0] flex justify-start">
+                  <button
+                    onClick={(e) => deleteGroup(selectedGroup.id, e)}
+                    className="bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded-xl py-2 px-4 text-[10px] font-black uppercase tracking-wider transition-all border border-red-200/40"
+                  >
+                    Supprimer Restaurant
+                  </button>
+                </div>
+              </div>
+            ) : (
+              // EXÉCUTION VUE B : Gestion de la grille d'écrans de la configuration choisie
+              <div className="space-y-4 flex-1 flex flex-col min-h-0">
+                <div className="flex items-center justify-between bg-[#ff751f]/5 border border-[#ff751f]/20 p-2.5 rounded-xl">
+                  <div className="min-w-0">
+                    <span className="text-[8px] font-black uppercase tracking-widest text-[#ff751f]">Config Active :</span>
+                    <p className="text-xs font-black text-[#b74b1b] truncate">{currentActiveConfig?.name}</p>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <select
+                      value={currentActiveConfig?.format}
+                      onChange={(e) => changeConfigFormat(currentActiveConfig!.id, e.target.value)}
+                      className="px-2 h-8 bg-white border border-[#e3dad0] rounded-lg text-[11px] font-black text-[#b74b1b] font-mono outline-none"
+                    >
+                      <option value="1x1">1x1</option>
+                      <option value="1x2">1x2</option>
+                      <option value="1x3">1x3</option>
+                      <option value="1x4">1x4</option>
+                      <option value="2x2">2x2</option>
+                    </select>
+                    <button
+                      onClick={() => setSelectedConfig(null)}
+                      className="text-[10px] font-bold bg-white text-[#7c6258] px-2.5 h-8 rounded-lg border border-[#e3dad0]"
+                    >
+                      ⬅ CONFIGS
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto py-1">
+                  <div 
+                    className="grid gap-2" 
+                    style={{ gridTemplateColumns: `repeat(${currentActiveConfig?.format.split('x').map(Number)[1] || 1}, minmax(0, 1fr))` }}
+                  >
+                    {popupGridSlots}
+                  </div>
+                </div>
+
+                <div className="flex gap-2 pt-2 border-t border-[#faf6f0]">
+                  <button
+                    onClick={() => {
+                      setSelectedGroup(null);
+                      setSelectedConfig(null);
+                    }}
+                    className="w-full bg-gradient-to-r from-[#ff751f] to-[#b74b1b] text-white rounded-xl py-2.5 text-[10px] font-black uppercase tracking-wider shadow-md text-center"
+                  >
+                    Fermer la Matrice
+                  </button>
+                </div>
+              </div>
+            )}
+
           </div>
         </div>
       )}
@@ -547,9 +688,12 @@ export default function Screens({
       {showAssignModal && assignTarget && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-in fade-in duration-150">
           <div className="bg-white border border-[#f2ede4] w-full max-w-xs rounded-3xl p-4 space-y-4 shadow-2xl">
+            <div className="text-[10px] font-black text-[#b74b1b] uppercase tracking-wider text-center border-b pb-2">
+              Associer une TV au Slot {assignTarget.displayNum}
+            </div>
             <div className="space-y-1.5 max-h-[35vh] overflow-y-auto pr-0.5">
               {unassignedScreens.length === 0 ? (
-                <p className="text-[10px] text-center text-[#7c6258] py-4 italic">Aucune TV disponible.</p>
+                <p className="text-[10px] text-center text-[#7c6258] py-4 italic">Aucune TV disponible en attente.</p>
               ) : (
                 unassignedScreens.map(s => (
                   <button

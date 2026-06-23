@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 interface Screen {
   id: string;
-  group_id: string | null;
+  configuration_id: string | null;
   last_ping: string | null;
   pos_x: number;
   pos_y: number;
+  total_cols: number;
+  total_rows: number;
   video_url: string | null;
   audio_url: string | null;
 }
@@ -13,9 +15,16 @@ interface Screen {
 interface Group {
   id: string;
   name: string;
-  format: string;
+  image_url?: string | null;
   open_time?: string | null;
   close_time?: string | null;
+}
+
+interface Configuration {
+  id: string;
+  group_id: string;
+  name: string;
+  format: string;
 }
 
 interface SupabaseAlbum {
@@ -41,8 +50,8 @@ interface BroadcastProps {
 }
 
 export default function Broadcast({
-  availableScreens,
-  availableGroups,
+  availableScreens = [],
+  availableGroups = [],
   sbClient,
   attributionInputs,
   setAttributionInputs,
@@ -50,32 +59,37 @@ export default function Broadcast({
   setGroupModes
 }: BroadcastProps) {
   const [scheduleInputs, setScheduleInputs] = useState<Record<string, { open: string; close: string }>>({});
-  const [selectedGroups, setSelectedGroups] = useState<Record<string, boolean>>({});
+  const [selectedConfigs, setSelectedConfigs] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
+
+  // États synchronisés en temps réel
+  const [localGroups, setLocalGroups] = useState<Group[]>(availableGroups);
+  const [localConfigurations, setLocalConfigurations] = useState<Configuration[]>([]);
+  const [localScreens, setLocalScreens] = useState<Screen[]>(availableScreens);
 
   const [albums, setAlbums] = useState<SupabaseAlbum[]>([]);
   const [allVideos, setAllVideos] = useState<SupabaseVideo[]>([]);
   const [videoPickerTarget, setVideoPickerTarget] = useState<string | null>(null);
   const [openedAlbumId, setOpenedAlbumId] = useState<string | null>(null);
 
-  // Activation sélective des sections pour la sauvegarde ciblé
   const [activeEdits, setActiveEdits] = useState<Record<string, boolean>>({
     schedule: false,
     audio: false,
     video: false
   });
 
-  // Gestion du mode d'insertion vidéo (bibliothèque ou lien manuel) par clé d'attribution
   const [videoModes, setVideoModes] = useState<Record<string, 'library' | 'manual'>>({});
 
   // =========================================================
-  // 🛡️ AUTOMATE DE SÉCURISATION POUR LES LIENS AUDIO MUTUALISÉS
+  // 🛡️ AUTOMATE DE NETTOYAGE DES URLS NETTES (PRO)
   // =========================================================
   const transformStorageUrl = (url: string): string => {
+    if (!url) return '';
+    if (url.includes(',')) {
+      return url.split(',').map(u => transformStorageUrl(u)).join(', ');
+    }
     let cleanUrl = url.trim();
-    if (!cleanUrl) return '';
 
-    // Convertisseur Dropbox (Streaming direct audio/vidéo sans téléchargement forcé)
     if (cleanUrl.includes('dropbox.com')) {
       let directUrl = cleanUrl.replace('www.dropbox.com', 'dl.dropboxusercontent.com');
       directUrl = directUrl.replace('dl=0', 'raw=1').replace('dl=1', 'raw=1');
@@ -85,7 +99,6 @@ export default function Broadcast({
       return directUrl;
     }
 
-    // Convertisseur Google Drive (Flux direct export)
     if (cleanUrl.includes('drive.google.com') || cleanUrl.includes('docs.google.com')) {
       const regExpId = /\/d\/([a-zA-Z0-9-_]+)/;
       const regExpParam = /[?&]id=([a-zA-Z0-9-_]+)/;
@@ -96,11 +109,42 @@ export default function Broadcast({
         return `https://docs.google.com/uc?export=download&id=${fileId}`;
       }
     }
-
     return cleanUrl;
   };
 
-  // Charger les dossiers et vidéos
+  // =========================================================
+  // ⚡ PIPELINE DE SYNCHRONISATION LIVE (REALTIME)
+  // =========================================================
+  const refreshAllData = useCallback(async () => {
+    try {
+      const { data: grp } = await sbClient.from('groups').select('*').order('name', { ascending: true });
+      const { data: conf } = await sbClient.from('configurations').select('*').order('name', { ascending: true });
+      const { data: scr } = await sbClient.from('screens_config').select('*').order('id', { ascending: true });
+      
+      if (grp) setLocalGroups(grp);
+      if (conf) setLocalConfigurations(conf);
+      if (scr) setLocalScreens(scr);
+    } catch (err) {
+      console.error("Erreur de rafraîchissement Realtime Broadcast :", err);
+    }
+  }, [sbClient]);
+
+  useEffect(() => {
+    refreshAllData();
+
+    const databaseChannel = sbClient
+      .channel('broadcast-realtime-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'groups' }, () => refreshAllData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'configurations' }, () => refreshAllData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'screens_config' }, () => refreshAllData())
+      .subscribe();
+
+    return () => {
+      sbClient.removeChannel(databaseChannel);
+    };
+  }, [sbClient, refreshAllData]);
+
+  // Charger la bibliothèque multimédia standard
   useEffect(() => {
     const loadLibraryData = async () => {
       const { data: rawAlbums } = await sbClient.from('albums').select('*').order('name', { ascending: true });
@@ -108,47 +152,49 @@ export default function Broadcast({
       setAlbums(rawAlbums || []);
       setAllVideos(rawVideos || []);
     };
-    loadLibraryData();
+    if (sbClient) loadLibraryData();
   }, [sbClient]);
 
-  // Sélectionner le premier restaurant par défaut au démarrage
+  // Sélectionner la première configuration disponible par défaut à l'ouverture
   useEffect(() => {
-    if (availableGroups.length > 0 && Object.keys(selectedGroups).length === 0) {
-      setSelectedGroups({ [availableGroups[0].id]: true });
+    if (localConfigurations.length > 0 && Object.keys(selectedConfigs).length === 0) {
+      setSelectedConfigs({ [localConfigurations[0].id]: true });
     }
-  }, [availableGroups]);
+  }, [localConfigurations]);
 
-  // Remplir les cases sans écraser ce que tu écris
+  // Pré-remplissage intelligent des attributions sans écrasement de saisie en cours
   useEffect(() => {
     const initialSchedules = { ...scheduleInputs };
     const initialAttributions = { ...attributionInputs };
     let changement = false;
 
-    availableGroups.forEach(group => {
-      if (!initialSchedules[group.id]) {
-        initialSchedules[group.id] = {
-          open: group.open_time || '08:00',
-          close: group.close_time || '22:00'
+    localConfigurations.forEach(config => {
+      const parentGroup = localGroups.find(g => g.id === config.group_id);
+      
+      if (!initialSchedules[config.id]) {
+        initialSchedules[config.id] = {
+          open: parentGroup?.open_time || '08:00',
+          close: parentGroup?.close_time || '22:00'
         };
         changement = true;
       }
 
-      const screensInGroup = availableScreens.filter(s => s.group_id === group.id);
-      if (screensInGroup.length > 0) {
-        const firstScreen = screensInGroup.find(scr => scr.pos_x === 0 && scr.pos_y === 0);
-        const audioKey = `${group.id}-restaurant-audio`;
+      const screensInConfig = localScreens.filter(s => s.configuration_id === config.id);
+      if (screensInConfig.length > 0) {
+        const firstScreen = screensInConfig.find(scr => scr.pos_x === 0 && scr.pos_y === 0);
+        const audioKey = `${config.id}-restaurant-audio`;
         if (initialAttributions[audioKey] === undefined) {
           initialAttributions[audioKey] = firstScreen?.audio_url || '';
           changement = true;
         }
 
-        const videoKey = `${group.id}-global-video`;
+        const videoKey = `${config.id}-global-video`;
         if (initialAttributions[videoKey] === undefined) {
-          initialAttributions[videoKey] = screensInGroup[0]?.video_url || '';
+          initialAttributions[videoKey] = screensInConfig[0]?.video_url || '';
           changement = true;
         }
 
-        screensInGroup.forEach(s => {
+        screensInConfig.forEach(s => {
           const localVideoKey = `${s.id}-video`;
           if (initialAttributions[localVideoKey] === undefined) {
             initialAttributions[localVideoKey] = s.video_url || '';
@@ -162,7 +208,7 @@ export default function Broadcast({
       setScheduleInputs(initialSchedules);
       setAttributionInputs(initialAttributions);
     }
-  }, [availableGroups, availableScreens]);
+  }, [localConfigurations, localGroups, localScreens]);
 
   const formatReadableName = (formatStr: string) => {
     if (formatStr === '1x1') return "1 Écran seul";
@@ -173,45 +219,43 @@ export default function Broadcast({
     return formatStr;
   };
 
-  const changeGroupMode = (groupId: string, value: 'global' | 'per-screen') => {
-    setGroupModes(prev => ({
-      ...prev,
-      [groupId]: value
-    }));
+  const changeConfigMode = (configId: string, value: 'global' | 'per-screen') => {
+    setGroupModes(prev => ({ ...prev, [configId]: value }));
+    setActiveEdits(prev => ({ ...prev, video: true }));
   };
 
   const updateAttributionInput = (key: string, value: string) => {
-    setAttributionInputs(prev => ({
-      ...prev,
-      [key]: value
-    }));
+    setAttributionInputs(prev => ({ ...prev, [key]: value }));
+    if (key.includes('video')) {
+      setActiveEdits(prev => ({ ...prev, video: true }));
+    } else if (key.includes('audio')) {
+      setActiveEdits(prev => ({ ...prev, audio: true }));
+    }
   };
 
-  const updateScheduleInput = (groupId: string, type: 'open' | 'close', value: string) => {
+  const updateScheduleInput = (configId: string, type: 'open' | 'close', value: string) => {
     setScheduleInputs(prev => ({
       ...prev,
-      [groupId]: {
-        ...prev[groupId],
-        [type]: value
-      }
+      [configId]: { ...prev[configId], [type]: value }
     }));
+    setActiveEdits(prev => ({ ...prev, schedule: true }));
   };
 
-  const toggleGroupSelection = (groupId: string, format: string) => {
-    setSelectedGroups(prev => {
+  const toggleConfigSelection = (configId: string, format: string) => {
+    setSelectedConfigs(prev => {
       const next = { ...prev };
-      if (next[groupId]) {
-        delete next[groupId];
+      if (next[configId]) {
+        delete next[configId];
         return next;
       }
       const alreadySelectedIds = Object.keys(next).filter(id => next[id]);
       if (alreadySelectedIds.length > 0) {
-        const firstSelected = availableGroups.find(g => g.id === alreadySelectedIds[0]);
+        const firstSelected = localConfigurations.find(c => c.id === alreadySelectedIds[0]);
         if (firstSelected && firstSelected.format !== format) {
-          return { [groupId]: true };
+          return { [configId]: true };
         }
       }
-      next[groupId] = true;
+      next[configId] = true;
       return next;
     });
   };
@@ -234,9 +278,12 @@ export default function Broadcast({
     setOpenedAlbumId(null);
   };
 
+  // =========================================================
+  // ⚡ DEPLOYEUR GLOBAL MULTI-CONFIGURATION PAR BATCH (LIVE)
+  // =========================================================
   const applyConfig = async () => {
-    const targetGroupIds = Object.keys(selectedGroups).filter(id => selectedGroups[id]);
-    if (isSaving || targetGroupIds.length === 0) return;
+    const targetConfigIds = Object.keys(selectedConfigs).filter(id => selectedConfigs[id]);
+    if (isSaving || targetConfigIds.length === 0) return;
 
     if (!activeEdits.schedule && !activeEdits.audio && !activeEdits.video) {
       alert("Veuillez cocher au moins une section à modifier avant d'enregistrer.");
@@ -246,87 +293,135 @@ export default function Broadcast({
     setIsSaving(true);
     try {
       const promises: Promise<any>[] = [];
+      const sourceConfigId = targetConfigIds[0];
 
-      for (const groupId of targetGroupIds) {
-        const group = availableGroups.find(g => g.id === groupId);
-        if (!group) continue;
+      // 1. ÉTAPE DE DÉPLOIEMENT DES HORAIRES SUR LES RESTAURANTS PARENTS CONCERNÉS
+      if (activeEdits.schedule) {
+        const schedule = scheduleInputs[sourceConfigId] || { open: '08:00', close: '22:00' };
+        const parentGroupIds = targetConfigIds
+          .map(cid => localConfigurations.find(c => c.id === cid)?.group_id)
+          .filter((gid): gid is string => !!gid);
 
-        const mode = groupModes[group.id] || 'global';
-        const screensInGroup = availableScreens.filter(s => s.group_id === group.id);
-        const [formatRows, formatCols] = group.format.split('x').map(Number);
-        const sourceGroupId = targetGroupIds[0];
-
-        if (activeEdits.schedule) {
-          const schedule = scheduleInputs[sourceGroupId] || { open: '08:00', close: '22:00' };
+        if (parentGroupIds.length > 0) {
           promises.push(
             sbClient.from('groups')
               .update({ open_time: schedule.open, close_time: schedule.close })
-              .eq('id', group.id)
+              .in('id', parentGroupIds)
           );
         }
+      }
 
-        if (activeEdits.video || activeEdits.audio) {
-          const rawAudioUrl = (attributionInputs[`${sourceGroupId}-restaurant-audio`] || '').trim();
-          const restaurantAudioUrl = transformStorageUrl(rawAudioUrl);
-          const globalVideoUrl = (attributionInputs[`${sourceGroupId}-global-video`] || '').trim();
+      // 2. ÉTAPE DE CONFIGURATION MULTI-DALLES DES ÉCRANS DE CHAQUE CONFIGURATION
+      if (activeEdits.video || activeEdits.audio) {
+        const rawAudioUrl = (attributionInputs[`${sourceConfigId}-restaurant-audio`] || '').trim();
+        const restaurantAudioUrl = transformStorageUrl(rawAudioUrl);
+        const globalVideoUrl = transformStorageUrl((attributionInputs[`${sourceConfigId}-global-video`] || '').trim());
 
-          screensInGroup.forEach(s => {
-            const isFirstScreen = s.pos_x === 0 && s.pos_y === 0;
-            const videoKey = targetGroupIds.length === 1 ? `${s.id}-video` : `${screensInGroup[0]?.id}-video`;
-            const localVideoUrl = (attributionInputs[videoKey] || '').trim();
+        for (const configId of targetConfigIds) {
+          const config = localConfigurations.find(c => c.id === configId);
+          if (!config) continue;
 
-            const screenPayload: Record<string, any> = {
-              total_cols: formatCols,
-              total_rows: formatRows,
-              pos_x: s.pos_x,
-              pos_y: s.pos_y
-            };
+          const mode = groupModes[config.id] || 'global';
+          const screensInConfig = localScreens.filter(s => s.configuration_id === config.id);
+          const [formatRows, formatCols] = config.format.split('x').map(Number);
 
-            if (activeEdits.video) {
-              screenPayload.video_url = mode === 'global' ? globalVideoUrl : localVideoUrl;
+          if (targetConfigIds.length === 1 && mode === 'per-screen') {
+            // Attribution par dalles individuelles sur une configuration unique
+            screensInConfig.forEach(s => {
+              const isFirstScreen = s.pos_x === 0 && s.pos_y === 0;
+              const localVideoKey = `${s.id}-video`;
+              const localVideoUrl = transformStorageUrl((attributionInputs[localVideoKey] || '').trim());
+
+              const payload: Record<string, any> = {
+                total_cols: formatCols,
+                total_rows: formatRows,
+                pos_x: s.pos_x,
+                pos_y: s.pos_y
+              };
+              if (activeEdits.video) payload.video_url = localVideoUrl;
+              if (activeEdits.audio) payload.audio_url = isFirstScreen ? restaurantAudioUrl : '';
+
+              promises.push(
+                sbClient.from('screens_config').update(payload).eq('id', s.id)
+              );
+            });
+          } else {
+            // Déploiement global unifié (Idéal pour envois groupés multi-restaurants)
+            const masterScreenIds: string[] = [];
+            const slaveScreenIds: string[] = [];
+
+            screensInConfig.forEach(s => {
+              if (s.pos_x === 0 && s.pos_y === 0) masterScreenIds.push(s.id);
+              else slaveScreenIds.push(s.id);
+            });
+
+            if (masterScreenIds.length > 0) {
+              const masterPayload: Record<string, any> = {
+                total_cols: formatCols,
+                total_rows: formatRows,
+                pos_x: 0,
+                pos_y: 0
+              };
+              if (activeEdits.video) masterPayload.video_url = globalVideoUrl;
+              if (activeEdits.audio) masterPayload.audio_url = restaurantAudioUrl;
+
+              promises.push(
+                sbClient.from('screens_config').update(masterPayload).in('id', masterScreenIds)
+              );
             }
-            if (activeEdits.audio) {
-              screenPayload.audio_url = isFirstScreen ? restaurantAudioUrl : '';
-            }
 
-            promises.push(
-              sbClient.from('screens_config')
-                .update(screenPayload)
-                .eq('id', s.id)
-            );
-          });
+            if (slaveScreenIds.length > 0) {
+              screensInConfig.forEach(s => {
+                if (s.pos_x !== 0 || s.pos_y !== 0) {
+                  const slavePayload: Record<string, any> = {
+                    total_cols: formatCols,
+                    total_rows: formatRows,
+                    pos_x: s.pos_x,
+                    pos_y: s.pos_y
+                  };
+                  if (activeEdits.video) slavePayload.video_url = globalVideoUrl;
+                  if (activeEdits.audio) slavePayload.audio_url = '';
+
+                  promises.push(
+                    sbClient.from('screens_config').update(slavePayload).eq('id', s.id)
+                  );
+                }
+              });
+            }
+          }
         }
       }
 
       await Promise.all(promises);
-      alert("Enregistré ! Seuls les réglages cochés ont été appliqués.");
+      alert("Enregistré ! Vos dalles se synchronisent en direct.");
     } catch (err) {
       console.error(err);
-      alert("Erreur lors de la sauvegarde.");
+      alert("Erreur lors de la sauvegarde cloud.");
     } finally {
       setIsSaving(false);
     }
   };
 
-  const targetGroupIds = Object.keys(selectedGroups).filter(id => selectedGroups[id]);
-  const selectedCount = targetGroupIds.length;
+  const targetConfigIds = Object.keys(selectedConfigs).filter(id => selectedConfigs[id]);
+  const selectedCount = targetConfigIds.length;
 
   let workspaceContent: React.ReactNode = null;
 
   if (selectedCount === 1) {
-    const group = availableGroups.find(g => g.id === targetGroupIds[0])!;
-    const [rows, cols] = group.format.split('x').map(Number);
-    const screensInGroup = availableScreens.filter(s => s.group_id === group.id);
-    const currentMode = groupModes[group.id] || 'global';
-    const audioKey = `${group.id}-restaurant-audio`;
-    const videoKey = `${group.id}-global-video`;
+    const config = localConfigurations.find(c => c.id === targetConfigIds[0])!;
+    const parentGroup = localGroups.find(g => g.id === config.group_id) || { name: 'Restaurant' };
+    const [rows, cols] = config.format.split('x').map(Number);
+    const screensInConfig = localScreens.filter(s => s.configuration_id === config.id);
+    const currentMode = groupModes[config.id] || 'global';
+    const audioKey = `${config.id}-restaurant-audio`;
+    const videoKey = `${config.id}-global-video`;
 
     const slots: React.ReactNode[] = [];
     let slotCounter = 1;
 
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
-        const s = screensInGroup.find(scr => scr.pos_x === x && scr.pos_y === y);
+        const s = screensInConfig.find(scr => scr.pos_x === x && scr.pos_y === y);
         slots.push(
           <div
             key={`slot-${y}-${x}`}
@@ -335,7 +430,7 @@ export default function Broadcast({
             }`}
           >
             <span className="text-[9px] font-bold opacity-60 tracking-wider">
-              ÉCRAN {slotCounter} {x === 0 && y === 0 ? '' : ''}
+              ÉCRAN {slotCounter}
             </span>
             <span className="text-[11px] font-black truncate max-w-full mt-1 tracking-tight">
               {s ? s.id : 'Vide'}
@@ -349,7 +444,8 @@ export default function Broadcast({
     let inputsHtml: React.ReactNode = null;
     if (currentMode === 'global') {
       const currentVideoUrl = attributionInputs[videoKey] || '';
-      const isManual = videoModes[videoKey] === 'manual';
+      const isUrlInLibrary = allVideos.some(v => v.url === currentVideoUrl);
+      const isManual = videoModes[videoKey] === 'manual' || (currentVideoUrl !== '' && !isUrlInLibrary && videoModes[videoKey] === undefined);
 
       inputsHtml = (
         <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
@@ -361,11 +457,11 @@ export default function Broadcast({
                 onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
                 className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
               />
-              <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo</span>
+              <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo Globale</span>
             </div>
-            {/* Beau switch visuel à icônes */}
             <button
               type="button"
+              disabled={isSaving}
               onClick={() => setVideoModes(prev => ({ ...prev, [videoKey]: isManual ? 'library' : 'manual' }))}
               className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
             >
@@ -377,7 +473,7 @@ export default function Broadcast({
             {isManual ? (
               <input
                 type="text"
-                disabled={isSaving || !activeEdits.video}
+                disabled={isSaving}
                 value={currentVideoUrl}
                 onChange={(e) => updateAttributionInput(videoKey, e.target.value)}
                 placeholder="Coller l'URL de votre vidéo ici..."
@@ -386,7 +482,7 @@ export default function Broadcast({
             ) : (
               <button
                 type="button"
-                disabled={isSaving || !activeEdits.video}
+                disabled={isSaving}
                 onClick={() => openVideoPicker(videoKey)}
                 className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
               >
@@ -404,11 +500,12 @@ export default function Broadcast({
       const inputsList: React.ReactNode[] = [];
       for (let y = 0; y < rows; y++) {
         for (let x = 0; x < cols; x++) {
-          const s = screensInGroup.find(scr => scr.pos_x === x && scr.pos_y === y);
+          const s = screensInConfig.find(scr => scr.pos_x === x && scr.pos_y === y);
           if (s) {
             const localVideoKey = `${s.id}-video`;
             const currentVideoUrl = attributionInputs[localVideoKey] || '';
-            const isManual = videoModes[localVideoKey] === 'manual';
+            const isUrlInLibrary = allVideos.some(v => v.url === currentVideoUrl);
+            const isManual = videoModes[localVideoKey] === 'manual' || (currentVideoUrl !== '' && !isUrlInLibrary && videoModes[localVideoKey] === undefined);
 
             inputsList.push(
               <div key={s.id} className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
@@ -422,9 +519,9 @@ export default function Broadcast({
                     />
                     <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Écran {localCounter}</span>
                   </div>
-                  {/* Beau switch visuel à icônes */}
                   <button
                     type="button"
+                    disabled={isSaving}
                     onClick={() => setVideoModes(prev => ({ ...prev, [localVideoKey]: isManual ? 'library' : 'manual' }))}
                     className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
                   >
@@ -436,7 +533,7 @@ export default function Broadcast({
                   {isManual ? (
                     <input
                       type="text"
-                      disabled={isSaving || !activeEdits.video}
+                      disabled={isSaving}
                       value={currentVideoUrl}
                       onChange={(e) => updateAttributionInput(localVideoKey, e.target.value)}
                       placeholder="Coller l'URL de votre vidéo ici..."
@@ -445,7 +542,7 @@ export default function Broadcast({
                   ) : (
                     <button
                       type="button"
-                      disabled={isSaving || !activeEdits.video}
+                      disabled={isSaving}
                       onClick={() => openVideoPicker(localVideoKey)}
                       className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
                     >
@@ -469,13 +566,14 @@ export default function Broadcast({
       <div className="glass-card p-6 space-y-5 shadow-xl border border-[#ff751f]/10">
         <div className="flex justify-between items-center border-b border-[#f2ede4] pb-3.5">
           <div>
-            <h2 className="text-sm font-bold text-[#b74b1b] uppercase tracking-wider">{group.name}</h2>
-            <p className="text-[10px] text-[#ff751f] font-semibold mt-0.5">{formatReadableName(group.format)}</p>
+            <span className="text-[9px] font-black uppercase tracking-wider text-[#ff751f]">{parentGroup.name}</span>
+            <h2 className="text-sm font-bold text-[#b74b1b] uppercase tracking-tight mt-0.5">{config.name}</h2>
+            <p className="text-[10px] text-[#ff751f] font-semibold mt-0.5">{formatReadableName(config.format)}</p>
           </div>
           <select
             disabled={isSaving}
             value={currentMode}
-            onChange={(e) => changeGroupMode(group.id, e.target.value as 'global' | 'per-screen')}
+            onChange={(e) => changeConfigMode(config.id, e.target.value as 'global' | 'per-screen')}
             className="bg-white text-[#b74b1b] border border-[#e3dad0] text-[10px] font-extrabold px-3 py-2 rounded-xl outline-none cursor-pointer hover:bg-[#faf6f0] transition-colors disabled:opacity-50"
           >
             <option value="global">Unique</option>
@@ -496,7 +594,7 @@ export default function Broadcast({
                 onChange={(e) => setActiveEdits(prev => ({ ...prev, schedule: e.target.checked }))}
                 className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
               />
-              <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Horaires</span>
+              <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Horaires Restaurant</span>
             </div>
             <div className={`grid grid-cols-2 gap-4 transition-opacity duration-200 ${!activeEdits.schedule ? 'opacity-40 pointer-events-none' : ''}`}>
               <div className="space-y-1.5">
@@ -506,10 +604,10 @@ export default function Broadcast({
                 </div>
                 <input
                   type="time"
-                  disabled={isSaving || !activeEdits.schedule}
-                  value={scheduleInputs[group.id]?.open || '08:00'}
-                  onChange={(e) => updateScheduleInput(group.id, 'open', e.target.value)}
-                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner disabled:opacity-50"
+                  disabled={isSaving}
+                  value={scheduleInputs[config.id]?.open || '08:00'}
+                  onChange={(e) => updateScheduleInput(config.id, 'open', e.target.value)}
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner"
                 />
               </div>
               <div className="space-y-1.5">
@@ -519,10 +617,10 @@ export default function Broadcast({
                 </div>
                 <input
                   type="time"
-                  disabled={isSaving || !activeEdits.schedule}
-                  value={scheduleInputs[group.id]?.close || '22:00'}
-                  onChange={(e) => updateScheduleInput(group.id, 'close', e.target.value)}
-                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner disabled:opacity-50"
+                  disabled={isSaving}
+                  value={scheduleInputs[config.id]?.close || '22:00'}
+                  onChange={(e) => updateScheduleInput(config.id, 'close', e.target.value)}
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner"
                 />
               </div>
             </div>
@@ -536,15 +634,15 @@ export default function Broadcast({
                 onChange={(e) => setActiveEdits(prev => ({ ...prev, audio: e.target.checked }))}
                 className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
               />
-              <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Audio</span>
+              <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Audio d'ambiance</span>
             </div>
             <div className={`transition-opacity duration-200 ${!activeEdits.audio ? 'opacity-40 pointer-events-none' : ''}`}>
               <input
                 type="text"
-                disabled={isSaving || !activeEdits.audio}
+                disabled={isSaving}
                 value={attributionInputs[audioKey] || ''}
                 onChange={(e) => updateAttributionInput(audioKey, e.target.value)}
-                placeholder="Lien..."
+                placeholder="Lien de flux radio m3u..."
                 className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 font-mono outline-none shadow-inner font-semibold"
               />
             </div>
@@ -557,18 +655,19 @@ export default function Broadcast({
       </div>
     );
   } else if (selectedCount > 1) {
-    const baseGroupId = targetGroupIds[0];
-    const baseGroup = availableGroups.find(g => g.id === baseGroupId)!;
-    const audioKey = `${baseGroupId}-restaurant-audio`;
-    const videoKey = `${baseGroupId}-global-video`;
+    const baseConfigId = targetConfigIds[0];
+    const baseConfig = localConfigurations.find(c => c.id === baseConfigId)!;
+    const audioKey = `${baseConfigId}-restaurant-audio`;
+    const videoKey = `${baseConfigId}-global-video`;
     const currentVideoUrl = attributionInputs[videoKey] || '';
-    const isManual = videoModes[videoKey] === 'manual';
+    const isUrlInLibrary = allVideos.some(v => v.url === currentVideoUrl);
+    const isManual = videoModes[videoKey] === 'manual' || (currentVideoUrl !== '' && !isUrlInLibrary && videoModes[videoKey] === undefined);
 
     workspaceContent = (
       <div className="glass-card p-6 space-y-5 shadow-xl border-2 border-dashed border-[#ff751f]/30 bg-[#ff751f]/5">
         <div>
-          <h2 className="text-sm font-black text-[#b74b1b] uppercase tracking-wider">Modification groupée ({selectedCount} restaurants)</h2>
-          <p className="text-[10px] text-[#ff751f] font-semibold mt-0.5">Format commun : {formatReadableName(baseGroup.format)}</p>
+          <h2 className="text-sm font-black text-[#b74b1b] uppercase tracking-wider">Modification groupée ({selectedCount} configurations)</h2>
+          <p className="text-[10px] text-[#ff751f] font-semibold mt-0.5">Format de dalles commun : {formatReadableName(baseConfig.format)}</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -590,9 +689,9 @@ export default function Broadcast({
                 </div>
                 <input
                   type="time"
-                  disabled={isSaving || !activeEdits.schedule}
-                  value={scheduleInputs[baseGroupId]?.open || '08:00'}
-                  onChange={(e) => updateScheduleInput(baseGroupId, 'open', e.target.value)}
+                  disabled={isSaving}
+                  value={scheduleInputs[baseConfigId]?.open || '08:00'}
+                  onChange={(e) => updateScheduleInput(baseConfigId, 'open', e.target.value)}
                   className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
                 />
               </div>
@@ -603,9 +702,9 @@ export default function Broadcast({
                 </div>
                 <input
                   type="time"
-                  disabled={isSaving || !activeEdits.schedule}
-                  value={scheduleInputs[baseGroupId]?.close || '22:00'}
-                  onChange={(e) => updateScheduleInput(baseGroupId, 'close', e.target.value)}
+                  disabled={isSaving}
+                  value={scheduleInputs[baseConfigId]?.close || '22:00'}
+                  onChange={(e) => updateScheduleInput(baseConfigId, 'close', e.target.value)}
                   className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
                 />
               </div>
@@ -625,10 +724,10 @@ export default function Broadcast({
             <div className={`transition-opacity duration-200 ${!activeEdits.audio ? 'opacity-40 pointer-events-none' : ''}`}>
               <input
                 type="text"
-                disabled={isSaving || !activeEdits.audio}
+                disabled={isSaving}
                 value={attributionInputs[audioKey] || ''}
                 onChange={(e) => updateAttributionInput(audioKey, e.target.value)}
-                placeholder="Appliquer à tous..."
+                placeholder="Appliquer à tous les restaurants parents..."
                 className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 font-mono outline-none shadow-inner font-semibold"
               />
             </div>
@@ -646,9 +745,9 @@ export default function Broadcast({
               />
               <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo Commune</span>
             </div>
-            {/* Beau switch visuel à icônes */}
             <button
               type="button"
+              disabled={isSaving}
               onClick={() => setVideoModes(prev => ({ ...prev, [videoKey]: isManual ? 'library' : 'manual' }))}
               className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
             >
@@ -660,7 +759,7 @@ export default function Broadcast({
             {isManual ? (
               <input
                 type="text"
-                disabled={isSaving || !activeEdits.video}
+                disabled={isSaving}
                 value={currentVideoUrl}
                 onChange={(e) => updateAttributionInput(videoKey, e.target.value)}
                 placeholder="Coller l'URL de votre vidéo commune ici..."
@@ -669,7 +768,7 @@ export default function Broadcast({
             ) : (
               <button
                 type="button"
-                disabled={isSaving || !activeEdits.video}
+                disabled={isSaving}
                 onClick={() => openVideoPicker(videoKey)}
                 className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
               >
@@ -686,45 +785,58 @@ export default function Broadcast({
   } else {
     workspaceContent = (
       <div className="glass-card p-12 text-center text-xs text-[#7c6258] font-bold border border-dashed border-[#e3dad0] bg-[#faf6f0]/10">
-        📍 Sélectionnez un ou plusieurs restaurants pour commencer les réglages.
+        📍 Sélectionnez une ou plusieurs configurations pour commencer à diffuser.
       </div>
     );
   }
 
   return (
     <div className="space-y-5 page-content">
-      {availableGroups.length === 0 ? (
+      {localGroups.length === 0 ? (
         <div className="glass-card p-8 text-center text-xs text-[#7c6258] border border-dashed border-[#e3dad0]">
-          Aucun restaurant disponible.
+          Aucun établissement créé.
         </div>
       ) : (
         <div className="space-y-5">
-          <div className="glass-card p-5 space-y-3 shadow-md bg-[#faf6f0]/30">
-            <div className="text-xs font-black text-[#b74b1b] uppercase tracking-wider mb-1">Choix des établissements</div>
-            <div className="flex flex-wrap gap-2">
-              {availableGroups.map(group => {
-                const isChecked = !!selectedGroups[group.id];
+          {/* SÉLECTEUR DE CONFIGURATIONS GROUPÉES PAR RESTAURANT PARENT */}
+          <div className="glass-card p-5 space-y-4 shadow-md bg-[#faf6f0]/30">
+            <div className="text-xs font-black text-[#b74b1b] uppercase tracking-wider mb-1">Choix des configurations de dalles</div>
+            <div className="space-y-3.5">
+              {localGroups.map(group => {
+                const configs = localConfigurations.filter(c => c.group_id === group.id);
+                if (configs.length === 0) return null;
+                
                 return (
-                  <button
-                    key={group.id}
-                    type="button"
-                    disabled={isSaving}
-                    onClick={() => toggleGroupSelection(group.id, group.format)}
-                    className={`px-3 py-2.5 rounded-xl border text-[11px] font-bold transition-all flex items-center gap-2 active:scale-95 ${
-                      isChecked 
-                        ? 'bg-[#ff751f]/10 border-[#ff751f]/40 text-[#ff751f] shadow-sm font-black' 
-                        : 'bg-white border-[#e3dad0] text-[#7c6258] opacity-80 hover:opacity-100'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      readOnly
-                      checked={isChecked}
-                      className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f] pointer-events-none"
-                    />
-                    <span>{group.name}</span>
-                    <span className="text-[9px] opacity-50 font-normal">({group.format})</span>
-                  </button>
+                  <div key={group.id} className="space-y-1.5 border-b border-[#e3dad0]/30 pb-3 last:border-none last:pb-0">
+                    <div className="text-[10px] font-extrabold text-[#b74b1b] uppercase px-1 tracking-wider">{group.name}</div>
+                    <div className="flex flex-wrap gap-2">
+                      {configs.map(config => {
+                        const isChecked = !!selectedConfigs[config.id];
+                        return (
+                          <button
+                            key={config.id}
+                            type="button"
+                            disabled={isSaving}
+                            onClick={() => toggleConfigSelection(config.id, config.format)}
+                            className={`px-3 py-2.5 rounded-xl border text-[11px] font-bold transition-all flex items-center gap-2 active:scale-95 ${
+                              isChecked 
+                                ? 'bg-[#ff751f]/10 border-[#ff751f]/40 text-[#ff751f] shadow-sm font-black' 
+                                : 'bg-white border-[#e3dad0] text-[#7c6258] opacity-80 hover:opacity-100'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              readOnly
+                              checked={isChecked}
+                              className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f] pointer-events-none"
+                            />
+                            <span>{config.name}</span>
+                            <span className="text-[9px] opacity-50 font-normal">({config.format})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 );
               })}
             </div>
