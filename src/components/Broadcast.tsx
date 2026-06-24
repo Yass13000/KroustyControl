@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 interface Screen {
   id: string;
@@ -81,6 +81,8 @@ export default function Broadcast({
   });
 
   const [videoModes, setVideoModes] = useState<Record<string, 'library' | 'manual'>>({});
+  
+  const isInitialPopulated = useRef(false);
 
   const transformStorageUrl = (url: string): string => {
     if (!url) return '';
@@ -130,9 +132,14 @@ export default function Broadcast({
 
     const databaseChannel = sbClient
       .channel('broadcast-realtime-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'groups' }, () => refreshAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'configurations' }, () => refreshAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'screens_config' }, () => refreshAllData())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'configurations' }, () => refreshAllData())
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'configurations' }, () => refreshAllData())
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'configurations' }, () => refreshAllData())
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'screens_config' }, (payload: any) => {
+        const oldKeys = Object.keys(payload.old || {});
+        if (oldKeys.length === 1 && oldKeys[0] === 'last_ping') return;
+        refreshAllData();
+      })
       .subscribe();
 
     return () => {
@@ -151,9 +158,10 @@ export default function Broadcast({
   }, [sbClient]);
 
   useEffect(() => {
+    if (localConfigurations.length === 0 || localGroups.length === 0 || isInitialPopulated.current) return;
+
     const initialSchedules = { ...scheduleInputs };
     const initialAttributions = { ...attributionInputs };
-    let changement = false;
 
     localConfigurations.forEach(config => {
       const parentGroup = localGroups.find(g => g.id === config.group_id);
@@ -163,7 +171,6 @@ export default function Broadcast({
           open: parentGroup?.open_time || '08:00',
           close: parentGroup?.close_time || '22:00'
         };
-        changement = true;
       }
 
       const screensInConfig = localScreens.filter(s => s.configuration_id === config.id);
@@ -172,29 +179,25 @@ export default function Broadcast({
         const audioKey = `${config.id}-restaurant-audio`;
         if (initialAttributions[audioKey] === undefined) {
           initialAttributions[audioKey] = firstScreen?.audio_url || '';
-          changement = true;
         }
 
         const videoKey = `${config.id}-global-video`;
         if (initialAttributions[videoKey] === undefined) {
           initialAttributions[videoKey] = screensInConfig[0]?.video_url || '';
-          changement = true;
         }
 
         screensInConfig.forEach(s => {
           const localVideoKey = `${s.id}-video`;
           if (initialAttributions[localVideoKey] === undefined) {
             initialAttributions[localVideoKey] = s.video_url || '';
-            changement = true;
           }
         });
       }
     });
 
-    if (changement) {
-      setScheduleInputs(initialSchedules);
-      setAttributionInputs(initialAttributions);
-    }
+    setScheduleInputs(initialSchedules);
+    setAttributionInputs(initialAttributions);
+    isInitialPopulated.current = true;
   }, [localConfigurations, localGroups, localScreens]);
 
   const formatReadableName = (formatStr: string) => {
@@ -228,23 +231,23 @@ export default function Broadcast({
     setActiveEdits(prev => ({ ...prev, schedule: true }));
   };
 
-  const toggleConfigSelection = (configId: string, format: string) => {
-    setSelectedConfigs(prev => {
-      const next = { ...prev };
-      if (next[configId]) {
-        delete next[configId];
-        return next;
-      }
-      const alreadySelectedIds = Object.keys(next).filter(id => next[id]);
-      if (alreadySelectedIds.length > 0) {
-        const firstSelected = localConfigurations.find(c => c.id === alreadySelectedIds[0]);
-        if (firstSelected && firstSelected.format !== format) {
-          return { [configId]: true };
-        }
-      }
-      next[configId] = true;
-      return next;
-    });
+  const handleFormatChange = (format: string) => {
+    setFormatFilter(format);
+    if (format) {
+      const matchingConfigs = localConfigurations.filter(c => c.format === format);
+      const newSelection: Record<string, boolean> = {};
+      matchingConfigs.forEach(c => newSelection[c.id] = true);
+      setSelectedConfigs(newSelection);
+    } else {
+      setSelectedConfigs({});
+    }
+  };
+
+  const toggleConfigSelection = (configId: string) => {
+    setSelectedConfigs(prev => ({
+      ...prev,
+      [configId]: !prev[configId]
+    }));
   };
 
   const getVideoNameByUrl = (url: string) => {
@@ -353,32 +356,24 @@ export default function Broadcast({
             }
 
             if (slaveScreenIds.length > 0) {
-              screensInConfig.forEach(s => {
-                if (s.pos_x !== 0 || s.pos_y !== 0) {
-                  const slavePayload: Record<string, any> = {
-                    total_cols: formatCols,
-                    total_rows: formatRows,
-                    pos_x: s.pos_x,
-                    pos_y: s.pos_y
-                  };
-                  if (activeEdits.video) slavePayload.video_url = globalVideoUrl;
-                  if (activeEdits.audio) slavePayload.audio_url = '';
+              const slavePayload: Record<string, any> = {
+                total_cols: formatCols,
+                total_rows: formatRows
+              };
+              if (activeEdits.video) slavePayload.video_url = globalVideoUrl;
+              if (activeEdits.audio) slavePayload.audio_url = '';
 
-                  promises.push(
-                    sbClient.from('screens_config').update(slavePayload).eq('id', s.id)
-                  );
-                }
-              });
+              promises.push(
+                sbClient.from('screens_config').update(slavePayload).in('id', slaveScreenIds)
+              );
             }
           }
         }
       }
 
       await Promise.all(promises);
-      alert("Enregistré ! Vos dalles se synchronisent en direct.");
     } catch (err) {
       console.error(err);
-      alert("Erreur lors de la sauvegarde cloud.");
     } finally {
       setIsSaving(false);
     }
@@ -399,380 +394,385 @@ export default function Broadcast({
   let workspaceContent: React.ReactNode = null;
 
   if (selectedCount === 1) {
-    const config = localConfigurations.find(c => c.id === targetConfigIds[0])!;
-    const parentGroup = localGroups.find(g => g.id === config.group_id) || { name: 'Restaurant' };
-    const [rows, cols] = config.format.split('x').map(Number);
-    const screensInConfig = localScreens.filter(s => s.configuration_id === config.id);
-    const currentMode = groupModes[config.id] || 'global';
-    const audioKey = `${config.id}-restaurant-audio`;
-    const videoKey = `${config.id}-global-video`;
+    const config = localConfigurations.find(c => c.id === targetConfigIds[0]);
+    if (config) {
+      const parentGroup = localGroups.find(g => g.id === config.group_id) || { name: 'Restaurant' };
+      const [rows, cols] = config.format.split('x').map(Number);
+      const screensInConfig = localScreens.filter(s => s.configuration_id === config.id);
+      const currentMode = groupModes[config.id] || 'global';
+      const audioKey = `${config.id}-restaurant-audio`;
+      const videoKey = `${config.id}-global-video`;
 
-    const slots: React.ReactNode[] = [];
-    let slotCounter = 1;
+      const slots: React.ReactNode[] = [];
+      let slotCounter = 1;
 
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        const s = screensInConfig.find(scr => scr.pos_x === x && scr.pos_y === y);
-        slots.push(
-          <div
-            key={`slot-${y}-${x}`}
-            className={`rounded-2xl flex flex-col items-center justify-center p-3 border transition-all h-20 shadow-inner ${
-              s ? 'bg-[#ff751f]/10 border-[#ff751f]/20 text-[#ff751f]' : 'bg-[#faf6f0]/50 border-dashed border-[#e3dad0] text-[#7c6258]'
-            }`}
-          >
-            <span className="text-[9px] font-bold opacity-60 tracking-wider">
-              ÉCRAN {slotCounter}
-            </span>
-            <span className="text-[11px] font-black truncate max-w-full mt-1 tracking-tight">
-              {s ? s.id : 'Vide'}
-            </span>
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const s = screensInConfig.find(scr => scr.pos_x === x && scr.pos_y === y);
+          slots.push(
+            <div
+              key={`slot-${y}-${x}`}
+              className={`rounded-2xl flex flex-col items-center justify-center p-3 border transition-all h-20 shadow-inner ${
+                s ? 'bg-[#ff751f]/10 border-[#ff751f]/20 text-[#ff751f]' : 'bg-[#faf6f0]/50 border-dashed border-[#e3dad0] text-[#7c6258]'
+              }`}
+            >
+              <span className="text-[9px] font-bold opacity-60 tracking-wider">
+                ÉCRAN {slotCounter}
+              </span>
+              <span className="text-[11px] font-black truncate max-w-full mt-1 tracking-tight">
+                {s ? s.id : 'Vide'}
+              </span>
+            </div>
+          );
+          slotCounter++;
+        }
+      }
+
+      let inputsHtml: React.ReactNode = null;
+      if (currentMode === 'global') {
+        const currentVideoUrl = attributionInputs[videoKey] || '';
+        const isUrlInLibrary = allVideos.some(v => v.url === currentVideoUrl);
+        const isManual = videoModes[videoKey] === 'manual' || (currentVideoUrl !== '' && !isUrlInLibrary && videoModes[videoKey] === undefined);
+
+        inputsHtml = (
+          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
+            <div className="flex items-center justify-between px-0.5">
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={activeEdits.video}
+                  onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
+                  className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+                />
+                <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo Globale</span>
+              </div>
+              <button
+                type="button"
+                disabled={isSaving}
+                onClick={() => setVideoModes(prev => ({ ...prev, [videoKey]: isManual ? 'library' : 'manual' }))}
+                className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
+              >
+                <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
+                <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
+              </button>
+            </div>
+            <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
+              {isManual ? (
+                <input
+                  type="text"
+                  disabled={isSaving}
+                  value={currentVideoUrl}
+                  onChange={(e) => updateAttributionInput(videoKey, e.target.value)}
+                  placeholder="Coller l'URL de votre vidéo ici..."
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
+                />
+              ) : (
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => openVideoPicker(videoKey)}
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
+                >
+                  <span className="truncate flex-1">
+                    {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir une vidéo..."}
+                  </span>
+                  <span className="text-[#ff751f] text-sm font-black">🖥</span>
+                </button>
+              )}
+            </div>
           </div>
         );
-        slotCounter++;
-      }
-    }
+      } else {
+        let localCounter = 1;
+        const inputsList: React.ReactNode[] = [];
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x < cols; x++) {
+            const s = screensInConfig.find(scr => scr.pos_x === x && scr.pos_y === y);
+            if (s) {
+              const localVideoKey = `${s.id}-video`;
+              const currentVideoUrl = attributionInputs[localVideoKey] || '';
+              const isUrlInLibrary = allVideos.some(v => v.url === currentVideoUrl);
+              const isManual = videoModes[localVideoKey] === 'manual' || (currentVideoUrl !== '' && !isUrlInLibrary && videoModes[localVideoKey] === undefined);
 
-    let inputsHtml: React.ReactNode = null;
-    if (currentMode === 'global') {
+              inputsList.push(
+                <div key={s.id} className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
+                  <div className="flex items-center justify-between px-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={activeEdits.video}
+                        onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
+                        className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+                      />
+                      <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Écran {localCounter}</span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      onClick={() => setVideoModes(prev => ({ ...prev, [localVideoKey]: isManual ? 'library' : 'manual' }))}
+                      className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
+                    >
+                      <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
+                      <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
+                    </button>
+                  </div>
+                  <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
+                    {isManual ? (
+                      <input
+                        type="text"
+                        disabled={isSaving}
+                        value={currentVideoUrl}
+                        onChange={(e) => updateAttributionInput(localVideoKey, e.target.value)}
+                        placeholder="Coller l'URL de votre vidéo ici..."
+                        className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={isSaving}
+                        onClick={() => openVideoPicker(localVideoKey)}
+                        className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
+                      >
+                        <span className="truncate flex-1">
+                          {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir une vidéo..."}
+                        </span>
+                        <span className="text-[#ff751f] text-sm font-black">🖥</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+            localCounter++;
+          }
+        }
+        inputsHtml = <div className="space-y-3">{inputsList}</div>;
+      }
+
+      workspaceContent = (
+        <div className="glass-card p-6 space-y-5 shadow-xl border border-[#ff751f]/10">
+          <div className="flex justify-between items-center border-b border-[#f2ede4] pb-3.5">
+            <div>
+              <span className="text-[9px] font-black uppercase tracking-wider text-[#ff751f]">{parentGroup.name}</span>
+              <h2 className="text-sm font-bold text-[#b74b1b] uppercase tracking-tight mt-0.5">{config.name}</h2>
+              <p className="text-[10px] text-[#ff751f] font-semibold mt-0.5">{formatReadableName(config.format)}</p>
+            </div>
+            <select
+              disabled={isSaving}
+              value={currentMode}
+              onChange={(e) => changeConfigMode(config.id, e.target.value as 'global' | 'per-screen')}
+              className="bg-white text-[#b74b1b] border border-[#e3dad0] text-[10px] font-extrabold px-3 py-2 rounded-xl outline-none cursor-pointer hover:bg-[#faf6f0] transition-colors disabled:opacity-50"
+            >
+              <option value="global">Unique</option>
+              <option value="per-screen">Séparé</option>
+            </select>
+          </div>
+
+          <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+            {slots}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-between space-y-2">
+              <div className="flex items-center gap-1.5 px-0.5">
+                <input
+                  type="checkbox"
+                  checked={activeEdits.schedule}
+                  onChange={(e) => setActiveEdits(prev => ({ ...prev, schedule: e.target.checked }))}
+                  className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+                />
+                <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Horaires Restaurant</span>
+              </div>
+              <div className={`grid grid-cols-2 gap-4 transition-opacity duration-200 ${!activeEdits.schedule ? 'opacity-40 pointer-events-none' : ''}`}>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1 px-0.5">
+                    <span className="text-[11px]">☀️</span>
+                    <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Allumage</span>
+                  </div>
+                  <input
+                    type="time"
+                    disabled={isSaving}
+                    value={scheduleInputs[config.id]?.open || '08:00'}
+                    onChange={(e) => updateScheduleInput(config.id, 'open', e.target.value)}
+                    className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1 px-0.5">
+                    <span className="text-[11px]">🌙</span>
+                    <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Extinction</span>
+                  </div>
+                  <input
+                    type="time"
+                    disabled={isSaving}
+                    value={scheduleInputs[config.id]?.close || '22:00'}
+                    onChange={(e) => updateScheduleInput(config.id, 'close', e.target.value)}
+                    className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-center space-y-2">
+              <div className="flex items-center gap-1.5 px-0.5">
+                <input
+                  type="checkbox"
+                  checked={activeEdits.audio}
+                  onChange={(e) => setActiveEdits(prev => ({ ...prev, audio: e.target.checked }))}
+                  className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+                />
+                <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Audio d'ambiance</span>
+              </div>
+              <div className={`transition-opacity duration-200 ${!activeEdits.audio ? 'opacity-40 pointer-events-none' : ''}`}>
+                <input
+                  type="text"
+                  disabled={isSaving}
+                  value={attributionInputs[audioKey] || ''}
+                  onChange={(e) => updateAttributionInput(audioKey, e.target.value)}
+                  placeholder="Lien de flux radio m3u..."
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 font-mono outline-none shadow-inner font-semibold"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3 pt-1">
+            {inputsHtml}
+          </div>
+        </div>
+      );
+    }
+  } else if (selectedCount > 1) {
+    const baseConfigId = targetConfigIds[0];
+    const baseConfig = localConfigurations.find(c => c.id === baseConfigId);
+    
+    if (baseConfig) {
+      const audioKey = `${baseConfigId}-restaurant-audio`;
+      const videoKey = `${baseConfigId}-global-video`;
       const currentVideoUrl = attributionInputs[videoKey] || '';
       const isUrlInLibrary = allVideos.some(v => v.url === currentVideoUrl);
       const isManual = videoModes[videoKey] === 'manual' || (currentVideoUrl !== '' && !isUrlInLibrary && videoModes[videoKey] === undefined);
 
-      inputsHtml = (
-        <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
-          <div className="flex items-center justify-between px-0.5">
-            <div className="flex items-center gap-1.5">
-              <input
-                type="checkbox"
-                checked={activeEdits.video}
-                onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
-                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
-              />
-              <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo Globale</span>
-            </div>
-            <button
-              type="button"
-              disabled={isSaving}
-              onClick={() => setVideoModes(prev => ({ ...prev, [videoKey]: isManual ? 'library' : 'manual' }))}
-              className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
-            >
-              <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
-              <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
-            </button>
+      workspaceContent = (
+        <div className="glass-card p-6 space-y-5 shadow-xl border-2 border-dashed border-[#ff751f]/30 bg-[#ff751f]/5">
+          <div>
+            <h2 className="text-sm font-black text-[#b74b1b] uppercase tracking-wider">Modification groupée ({selectedCount} configurations)</h2>
+            <p className="text-[10px] text-[#ff751f] font-semibold mt-0.5">Format de dalles commun : {formatReadableName(baseConfig.format)}</p>
           </div>
-          <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
-            {isManual ? (
-              <input
-                type="text"
-                disabled={isSaving}
-                value={currentVideoUrl}
-                onChange={(e) => updateAttributionInput(videoKey, e.target.value)}
-                placeholder="Coller l'URL de votre vidéo ici..."
-                className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
-              />
-            ) : (
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-between space-y-2">
+              <div className="flex items-center gap-1.5 px-0.5">
+                <input
+                  type="checkbox"
+                  checked={activeEdits.schedule}
+                  onChange={(e) => setActiveEdits(prev => ({ ...prev, schedule: e.target.checked }))}
+                  className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+                />
+                <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Modifier Horaires Communs</span>
+              </div>
+              <div className={`grid grid-cols-2 gap-4 transition-opacity duration-200 ${!activeEdits.schedule ? 'opacity-40 pointer-events-none' : ''}`}>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1 px-0.5">
+                    <span className="text-[11px]">☀️</span>
+                    <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Allumage</span>
+                  </div>
+                  <input
+                    type="time"
+                    disabled={isSaving}
+                    value={scheduleInputs[baseConfigId]?.open || '08:00'}
+                    onChange={(e) => updateScheduleInput(baseConfigId, 'open', e.target.value)}
+                    className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1 px-0.5">
+                    <span className="text-[11px]">🌙</span>
+                    <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Extinction</span>
+                  </div>
+                  <input
+                    type="time"
+                    disabled={isSaving}
+                    value={scheduleInputs[baseConfigId]?.close || '22:00'}
+                    onChange={(e) => updateScheduleInput(baseConfigId, 'close', e.target.value)}
+                    className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-center space-y-2">
+              <div className="flex items-center gap-1.5 px-0.5">
+                <input
+                  type="checkbox"
+                  checked={activeEdits.audio}
+                  onChange={(e) => setActiveEdits(prev => ({ ...prev, audio: e.target.checked }))}
+                  className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+                />
+                <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Modifier Musique Commune</span>
+              </div>
+              <div className={`transition-opacity duration-200 ${!activeEdits.audio ? 'opacity-40 pointer-events-none' : ''}`}>
+                <input
+                  type="text"
+                  disabled={isSaving}
+                  value={attributionInputs[audioKey] || ''}
+                  onChange={(e) => updateAttributionInput(audioKey, e.target.value)}
+                  placeholder="Appliquer à tous les restaurants parents..."
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 font-mono outline-none shadow-inner font-semibold"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
+            <div className="flex items-center justify-between px-0.5">
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={activeEdits.video}
+                  onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
+                  className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+                />
+                <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo Commune</span>
+              </div>
               <button
                 type="button"
                 disabled={isSaving}
-                onClick={() => openVideoPicker(videoKey)}
-                className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
+                onClick={() => setVideoModes(prev => ({ ...prev, [videoKey]: isManual ? 'library' : 'manual' }))}
+                className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
               >
-                <span className="truncate flex-1">
-                  {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir une vidéo..."}
-                </span>
-                <span className="text-[#ff751f] text-sm font-black">🖥</span>
+                <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
+                <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
               </button>
-            )}
+            </div>
+            <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
+              {isManual ? (
+                <input
+                  type="text"
+                  disabled={isSaving}
+                  value={currentVideoUrl}
+                  onChange={(e) => updateAttributionInput(videoKey, e.target.value)}
+                  placeholder="Coller l'URL de votre vidéo commune ici..."
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
+                />
+              ) : (
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => openVideoPicker(videoKey)}
+                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
+                >
+                  <span className="truncate flex-1">
+                    {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir la vidéo commune..."}
+                  </span>
+                  <span className="text-[#ff751f] text-sm font-black">🖥</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       );
-    } else {
-      let localCounter = 1;
-      const inputsList: React.ReactNode[] = [];
-      for (let y = 0; y < rows; y++) {
-        for (let x = 0; x < cols; x++) {
-          const s = screensInConfig.find(scr => scr.pos_x === x && scr.pos_y === y);
-          if (s) {
-            const localVideoKey = `${s.id}-video`;
-            const currentVideoUrl = attributionInputs[localVideoKey] || '';
-            const isUrlInLibrary = allVideos.some(v => v.url === currentVideoUrl);
-            const isManual = videoModes[localVideoKey] === 'manual' || (currentVideoUrl !== '' && !isUrlInLibrary && videoModes[localVideoKey] === undefined);
-
-            inputsList.push(
-              <div key={s.id} className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
-                <div className="flex items-center justify-between px-0.5">
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="checkbox"
-                      checked={activeEdits.video}
-                      onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
-                      className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
-                    />
-                    <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Écran {localCounter}</span>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isSaving}
-                    onClick={() => setVideoModes(prev => ({ ...prev, [localVideoKey]: isManual ? 'library' : 'manual' }))}
-                    className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
-                  >
-                    <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
-                    <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
-                  </button>
-                </div>
-                <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
-                  {isManual ? (
-                    <input
-                      type="text"
-                      disabled={isSaving}
-                      value={currentVideoUrl}
-                      onChange={(e) => updateAttributionInput(localVideoKey, e.target.value)}
-                      placeholder="Coller l'URL de votre vidéo ici..."
-                      className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={isSaving}
-                      onClick={() => openVideoPicker(localVideoKey)}
-                      className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
-                    >
-                      <span className="truncate flex-1">
-                        {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir une vidéo..."}
-                      </span>
-                      <span className="text-[#ff751f] text-sm font-black">🖥</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          }
-          localCounter++;
-        }
-      }
-      inputsHtml = <div className="space-y-3">{inputsList}</div>;
     }
-
-    workspaceContent = (
-      <div className="glass-card p-6 space-y-5 shadow-xl border border-[#ff751f]/10">
-        <div className="flex justify-between items-center border-b border-[#f2ede4] pb-3.5">
-          <div>
-            <span className="text-[9px] font-black uppercase tracking-wider text-[#ff751f]">{parentGroup.name}</span>
-            <h2 className="text-sm font-bold text-[#b74b1b] uppercase tracking-tight mt-0.5">{config.name}</h2>
-            <p className="text-[10px] text-[#ff751f] font-semibold mt-0.5">{formatReadableName(config.format)}</p>
-          </div>
-          <select
-            disabled={isSaving}
-            value={currentMode}
-            onChange={(e) => changeConfigMode(config.id, e.target.value as 'global' | 'per-screen')}
-            className="bg-white text-[#b74b1b] border border-[#e3dad0] text-[10px] font-extrabold px-3 py-2 rounded-xl outline-none cursor-pointer hover:bg-[#faf6f0] transition-colors disabled:opacity-50"
-          >
-            <option value="global">Unique</option>
-            <option value="per-screen">Séparé</option>
-          </select>
-        </div>
-
-        <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
-          {slots}
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-between space-y-2">
-            <div className="flex items-center gap-1.5 px-0.5">
-              <input
-                type="checkbox"
-                checked={activeEdits.schedule}
-                onChange={(e) => setActiveEdits(prev => ({ ...prev, schedule: e.target.checked }))}
-                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
-              />
-              <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Horaires Restaurant</span>
-            </div>
-            <div className={`grid grid-cols-2 gap-4 transition-opacity duration-200 ${!activeEdits.schedule ? 'opacity-40 pointer-events-none' : ''}`}>
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-1 px-0.5">
-                  <span className="text-[11px]">☀️</span>
-                  <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Allumage</span>
-                </div>
-                <input
-                  type="time"
-                  disabled={isSaving}
-                  value={scheduleInputs[config.id]?.open || '08:00'}
-                  onChange={(e) => updateScheduleInput(config.id, 'open', e.target.value)}
-                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-1 px-0.5">
-                  <span className="text-[11px]">🌙</span>
-                  <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Extinction</span>
-                </div>
-                <input
-                  type="time"
-                  disabled={isSaving}
-                  value={scheduleInputs[config.id]?.close || '22:00'}
-                  onChange={(e) => updateScheduleInput(config.id, 'close', e.target.value)}
-                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-center space-y-2">
-            <div className="flex items-center gap-1.5 px-0.5">
-              <input
-                type="checkbox"
-                checked={activeEdits.audio}
-                onChange={(e) => setActiveEdits(prev => ({ ...prev, audio: e.target.checked }))}
-                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
-              />
-              <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Audio d'ambiance</span>
-            </div>
-            <div className={`transition-opacity duration-200 ${!activeEdits.audio ? 'opacity-40 pointer-events-none' : ''}`}>
-              <input
-                type="text"
-                disabled={isSaving}
-                value={attributionInputs[audioKey] || ''}
-                onChange={(e) => updateAttributionInput(audioKey, e.target.value)}
-                placeholder="Lien de flux radio m3u..."
-                className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 font-mono outline-none shadow-inner font-semibold"
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-3 pt-1">
-          {inputsHtml}
-        </div>
-      </div>
-    );
-  } else if (selectedCount > 1) {
-    const baseConfigId = targetConfigIds[0];
-    const baseConfig = localConfigurations.find(c => c.id === baseConfigId)!;
-    const audioKey = `${baseConfigId}-restaurant-audio`;
-    const videoKey = `${baseConfigId}-global-video`;
-    const currentVideoUrl = attributionInputs[videoKey] || '';
-    const isUrlInLibrary = allVideos.some(v => v.url === currentVideoUrl);
-    const isManual = videoModes[videoKey] === 'manual' || (currentVideoUrl !== '' && !isUrlInLibrary && videoModes[videoKey] === undefined);
-
-    workspaceContent = (
-      <div className="glass-card p-6 space-y-5 shadow-xl border-2 border-dashed border-[#ff751f]/30 bg-[#ff751f]/5">
-        <div>
-          <h2 className="text-sm font-black text-[#b74b1b] uppercase tracking-wider">Modification groupée ({selectedCount} configurations)</h2>
-          <p className="text-[10px] text-[#ff751f] font-semibold mt-0.5">Format de dalles commun : {formatReadableName(baseConfig.format)}</p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-between space-y-2">
-            <div className="flex items-center gap-1.5 px-0.5">
-              <input
-                type="checkbox"
-                checked={activeEdits.schedule}
-                onChange={(e) => setActiveEdits(prev => ({ ...prev, schedule: e.target.checked }))}
-                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
-              />
-              <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Modifier Horaires Communs</span>
-            </div>
-            <div className={`grid grid-cols-2 gap-4 transition-opacity duration-200 ${!activeEdits.schedule ? 'opacity-40 pointer-events-none' : ''}`}>
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-1 px-0.5">
-                  <span className="text-[11px]">☀️</span>
-                  <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Allumage</span>
-                </div>
-                <input
-                  type="time"
-                  disabled={isSaving}
-                  value={scheduleInputs[baseConfigId]?.open || '08:00'}
-                  onChange={(e) => updateScheduleInput(baseConfigId, 'open', e.target.value)}
-                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-1 px-0.5">
-                  <span className="text-[11px]">🌙</span>
-                  <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Extinction</span>
-                </div>
-                <input
-                  type="time"
-                  disabled={isSaving}
-                  value={scheduleInputs[baseConfigId]?.close || '22:00'}
-                  onChange={(e) => updateScheduleInput(baseConfigId, 'close', e.target.value)}
-                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] flex flex-col justify-center space-y-2">
-            <div className="flex items-center gap-1.5 px-0.5">
-              <input
-                type="checkbox"
-                checked={activeEdits.audio}
-                onChange={(e) => setActiveEdits(prev => ({ ...prev, audio: e.target.checked }))}
-                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
-              />
-              <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Modifier Musique Commune</span>
-            </div>
-            <div className={`transition-opacity duration-200 ${!activeEdits.audio ? 'opacity-40 pointer-events-none' : ''}`}>
-              <input
-                type="text"
-                disabled={isSaving}
-                value={attributionInputs[audioKey] || ''}
-                onChange={(e) => updateAttributionInput(audioKey, e.target.value)}
-                placeholder="Appliquer à tous les restaurants parents..."
-                className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] placeholder-[#e3dad0]/60 font-mono outline-none shadow-inner font-semibold"
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
-          <div className="flex items-center justify-between px-0.5">
-            <div className="flex items-center gap-1.5">
-              <input
-                type="checkbox"
-                checked={activeEdits.video}
-                onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
-                className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
-              />
-              <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo Commune</span>
-            </div>
-            <button
-              type="button"
-              disabled={isSaving}
-              onClick={() => setVideoModes(prev => ({ ...prev, [videoKey]: isManual ? 'library' : 'manual' }))}
-              className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
-            >
-              <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
-              <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
-            </button>
-          </div>
-          <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
-            {isManual ? (
-              <input
-                type="text"
-                disabled={isSaving}
-                value={currentVideoUrl}
-                onChange={(e) => updateAttributionInput(videoKey, e.target.value)}
-                placeholder="Coller l'URL de votre vidéo commune ici..."
-                className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
-              />
-            ) : (
-              <button
-                type="button"
-                disabled={isSaving}
-                onClick={() => openVideoPicker(videoKey)}
-                className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
-              >
-                <span className="truncate flex-1">
-                  {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir la vidéo commune..."}
-                </span>
-                <span className="text-[#ff751f] text-sm font-black">🖥</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    );
   }
 
   return (
@@ -785,7 +785,7 @@ export default function Broadcast({
           <div className="glass-card p-5 space-y-4 shadow-md bg-[#faf6f0]/30">
             <select
               value={formatFilter}
-              onChange={(e) => setFormatFilter(e.target.value)}
+              onChange={(e) => handleFormatChange(e.target.value)}
               className="w-full bg-white border border-[#e3dad0] rounded-2xl p-4 text-xs font-black text-[#b74b1b] outline-none shadow-inner cursor-pointer"
             >
               <option value="">1. Filtrer par format d'écran...</option>
@@ -813,7 +813,7 @@ export default function Broadcast({
                     <button
                       key={config.id}
                       type="button"
-                      onClick={() => toggleConfigSelection(config.id, config.format)}
+                      onClick={() => toggleConfigSelection(config.id)}
                       className={`px-3 py-2.5 rounded-xl border text-[11px] font-bold transition-all flex items-center gap-3 text-left active:scale-95 ${
                         isChecked 
                           ? 'bg-[#ff751f]/10 border-[#ff751f]/40 text-[#ff751f] shadow-sm font-black' 
