@@ -50,25 +50,26 @@ export default function Videos({ onPlayVideo }: VideosProps) {
     return filename.split('.').pop()?.toUpperCase() || 'LINK';
   };
 
-  // =========================================================
-  // 🛡️ AUTOMATE DE SÉCURISATION DROPBOX AVEC FIX DE CLÉ RLKEY
-  // =========================================================
+  // =========================================================================
+  // ⚡ AUTOMATE DE NETTOYAGE DROPBOX (RLKEY) ET GOOGLE DRIVE (DIRECT STREAM)
+  // =========================================================================
   const transformStorageUrl = (url: string): string => {
     let cleanUrl = url.trim();
     if (!cleanUrl) return '';
 
-    // 1. Gestion du format Dropbox (SCL avec clé rlkey)
+    // 1. Optimisation Dropbox (Prise en charge des signatures rlkey)
     if (cleanUrl.includes('dropbox.com')) {
-      let directUrl = cleanUrl.replace('www.dropbox.com', 'dl.dropboxusercontent.com');
-      directUrl = directUrl.replace('dl=0', 'raw=1').replace('dl=1', 'raw=1');
+      let directUrl = cleanUrl.replace(/www\.dropbox\.com|dropbox\.com/, 'dl.dropboxusercontent.com');
+      // On retire proprement l'ancienne variable de téléchargement forcée
+      directUrl = directUrl.replace(/[?&]dl=[01]/, '');
       
       if (!directUrl.includes('raw=1')) {
-        directUrl += directUrl.includes('?') ? '&raw=1' : '?raw=1';
+        directUrl += (directUrl.includes('?') ? '&' : '?') + 'raw=1';
       }
       return directUrl;
     }
 
-    // 2. Sécurisation Google Drive
+    // 2. Optimisation Google Drive (Extraction propre de l'ID universel)
     if (cleanUrl.includes('drive.google.com') || cleanUrl.includes('docs.google.com')) {
       const regExpId = /\/d\/([a-zA-Z0-9-_]+)/;
       const regExpParam = /[?&]id=([a-zA-Z0-9-_]+)/;
@@ -78,7 +79,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
       const fileId = (matchId && matchId[1]) || (matchParam && matchParam[1]);
 
       if (fileId) {
-        return `https://docs.google.com/uc?export=download&id=${fileId}`;
+        return `https://drive.google.com/uc?export=download&id=${fileId}`;
       }
     }
 
@@ -161,17 +162,22 @@ export default function Videos({ onPlayVideo }: VideosProps) {
     }
   };
 
-  // 🛡️ CAPTURE SÉCURISÉE AVEC TIMEOUT ANTI-BLOCAGE CORS
   const generateThumbnailFromUrl = (url: string): Promise<string> => {
     return new Promise((resolve) => {
-      // Si Dropbox ou Drive met trop de temps à répondre (CORS bloqué), on annule après 1.5s pour ne pas figer l'UI
       const safetyTimeout = setTimeout(() => {
         resolve('');
-      }, 1500);
+      }, 2000);
 
       if (url.includes('google.com') || url.includes('docs.google.com')) {
         clearTimeout(safetyTimeout);
-        resolve('');
+        const regExpParam = /[?&]id=([a-zA-Z0-9-_]+)/;
+        const matchParam = url.match(regExpParam);
+        
+        if (matchParam && matchParam[1]) {
+          resolve(`https://drive.google.com/thumbnail?id=${matchParam[1]}&sz=w320`);
+        } else {
+          resolve('');
+        }
         return;
       }
 
@@ -211,6 +217,8 @@ export default function Videos({ onPlayVideo }: VideosProps) {
         clearTimeout(safetyTimeout);
         resolve(''); 
       };
+
+      video.load();
     });
   };
 
@@ -318,7 +326,11 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                 .map(album => {
                   const videosList = albumVideos[album.id] || [];
                   const videosCount = videosList.length;
+                  
+                  // FIX COVERS : Recherche de la première vidéo qui a un thumbnail généré
+                  const videoWithThumb = videosList.find(v => v.thumbnail);
                   const firstVideo = videosList[0];
+                  const coverThumbnail = videoWithThumb?.thumbnail || '';
 
                   return (
                     <div 
@@ -335,12 +347,21 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                             <div className="absolute inset-0 bg-[#ff751f]/10 rounded-xl translate-x-0.5 translate-y-0.5 -rotate-2 shadow-sm border border-[#f2ede4]"></div>
                           )}
                           
+                          {/* FIX SYNC COVERS EN CASCADE */}
                           <div className="absolute inset-0 rounded-xl overflow-hidden bg-gradient-to-br from-white to-[#faf6f0] border border-[#e3dad0] flex items-center justify-center shadow-md group-hover:border-[#ff751f]/40 transition-colors">
-                            {firstVideo?.thumbnail ? (
+                            {coverThumbnail ? (
                               <img 
-                                src={firstVideo.thumbnail} 
+                                src={coverThumbnail} 
                                 className="w-full h-full object-cover scale-105 group-hover:scale-110 transition-transform duration-300" 
                                 alt="" 
+                              />
+                            ) : firstVideo && firstVideo.url && !firstVideo.url.includes('google.com') ? (
+                              /* NOUVEAU aperçu vidéo dynamique si pas de miniature en BDD (comme dans tes sous-onglets) */
+                              <video 
+                                src={firstVideo.url}
+                                className="w-full h-full object-cover scale-105 group-hover:scale-110 transition-transform duration-300 pointer-events-none"
+                                muted
+                                playsInline
                               />
                             ) : firstVideo ? (
                               <div className="w-full h-full bg-gradient-to-tr from-[#b74b1b]/20 to-[#ff751f]/20 flex items-center justify-center text-[#ff751f]">
@@ -366,6 +387,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
 
                       <div className="flex items-center gap-3">
                         <button
+                          type="button"
                           onClick={(e) => handleDeleteAlbum(album.id, album.name, e)}
                           className="btn-action text-[#7c6258] hover:text-red-400 p-2 text-xs font-bold transition-colors"
                         >
@@ -393,6 +415,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
               </p>
             </div>
             <button
+              type="button"
               onClick={() => setActiveAlbumForView(null)}
               className="bg-white hover:bg-[#faf6f0] border border-[#e3dad0] text-[#b74b1b] px-4 py-2 rounded-full text-xs font-bold transition-all active:scale-95 shadow-md"
             >
@@ -450,6 +473,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                         </div>
                       </div>
                       <button
+                        type="button"
                         onClick={(e) => copyVideoLink(e, getAuthenticatedUrl(v.url))}
                         className="absolute top-2 right-2 bg-white/90 p-2 rounded-lg border border-[#e3dad0] shadow-md opacity-0 group-hover:opacity-100 transition-opacity duration-200 hover:bg-[#faf6f0] z-20"
                       >
@@ -464,6 +488,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                         <p className="text-[9px] text-[#7c6258] font-bold mt-0.5">{v.size}</p>
                       </div>
                       <button
+                        type="button"
                         onClick={(e) => handleDeleteVideo(v.id, v.name, e)}
                         className="text-[#7c6258] hover:text-red-500 p-1 text-[10px] font-bold"
                       >
@@ -478,6 +503,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
 
           <div className="pt-2">
             <button
+              type="button"
               onClick={() => openAssignVideoModal(activeAlbumForView.id)}
               className="w-full bg-white/80 hover:bg-white border border-dashed border-[#e3dad0] hover:border-[#ff751f]/50 text-[#b74b1b] text-xs font-bold py-4 rounded-2xl transition-all flex items-center justify-center gap-1.5 active:scale-99 shadow-sm"
             >
@@ -491,6 +517,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
         {showFabMenu && (
           <div className="bg-white/95 border border-[#e3dad0] p-2.5 rounded-2xl shadow-2xl flex flex-col gap-1.5 mb-3 backdrop-blur-md min-w-[160px] animate-in fade-in slide-in-from-bottom-2 duration-200">
             <button
+              type="button"
               onClick={() => {
                 setShowFabMenu(false);
                 setShowCreateAlbum(true);
@@ -500,6 +527,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
               Nouveau Dossier
             </button>
             <button
+              type="button"
               onClick={() => {
                 setShowFabMenu(false);
                 if (activeAlbumForView) {
@@ -516,6 +544,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
         )}
 
         <button
+          type="button"
           onClick={() => setShowFabMenu(prev => !prev)}
           className={`w-14 h-14 rounded-full bg-gradient-to-r from-[#ff751f] to-[#b74b1b] border border-[#ff751f]/20 text-white flex items-center justify-center shadow-2xl hover:shadow-[#ff751f]/20 active:scale-95 transition-all cursor-pointer btn-glow ${
             showFabMenu ? 'rotate-45 bg-gradient-to-r from-[#b74b1b] to-[#ff751f] border-[#b74b1b]/20' : ''
@@ -543,6 +572,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
             />
             <div className="flex gap-2 pt-1">
               <button
+                type="button"
                 onClick={() => {
                   setShowCreateAlbum(false);
                   setNewAlbumName('');
@@ -552,6 +582,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                 Annuler
               </button>
               <button
+                type="button"
                 onClick={handleCreateAlbum}
                 className="w-1/2 bg-[#ff751f] hover:bg-[#b74b1b] text-white text-xs font-bold py-3.5 rounded-2xl shadow-md transition-colors active:scale-95"
               >
@@ -562,7 +593,6 @@ export default function Videos({ onPlayVideo }: VideosProps) {
         </div>
       )}
 
-      {/* MODAL AJOUT PAR LIEN REFAIT À NEUF AVEC ANTI-FREEZE */}
       {showAddVideoModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-white border border-[#f2ede4] w-full max-sm rounded-3xl p-6 space-y-4 shadow-2xl">
@@ -597,6 +627,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
 
             <div className="flex gap-2 pt-2">
               <button
+                type="button"
                 onClick={() => {
                   setShowAddVideoModal(false);
                   setNewVideoName('');
@@ -608,6 +639,7 @@ export default function Videos({ onPlayVideo }: VideosProps) {
                 Annuler
               </button>
               <button
+                type="button"
                 onClick={handleAddVideoLink}
                 className="w-1/2 bg-[#ff751f] hover:bg-[#b74b1b] text-white text-xs font-bold py-3.5 rounded-2xl shadow-md transition-colors active:scale-95"
               >
