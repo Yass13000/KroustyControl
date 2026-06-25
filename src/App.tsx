@@ -4,12 +4,15 @@ import Broadcast from './components/Broadcast';
 import Screens from './components/Screens';
 import Videos from './components/Videos';
 
-interface Screen {
+// 1. TYPAGE CORRIGÉ POUR ÉVITER LA COLLISION AVEC L'INTERFACE SCREEN DU NAVIGATEUR
+export interface AppScreen {
   id: string;
-  group_id: string | null;
+  configuration_id: string | null; // Aligné avec la structure de la table de dalles
   last_ping: string | null;
   pos_x: number;
   pos_y: number;
+  total_cols: number;
+  total_rows: number;
   video_url: string | null;
   audio_url: string | null; 
 }
@@ -17,13 +20,12 @@ interface Screen {
 interface Group {
   id: string;
   name: string;
-  format: string;
   image_url: string | null; 
 }
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'accueil' | 'appareils' | 'bibliotheque'>('appareils');
-  const [availableScreens, setAvailableScreens] = useState<Screen[]>([]);
+  const [availableScreens, setAvailableScreens] = useState<AppScreen[]>([]);
   const [availableGroups, setAvailableGroups] = useState<Group[]>([]);
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
 
@@ -38,9 +40,11 @@ export default function App() {
   const now = new Date().getTime();
 
   const totalScreens = availableScreens.length;
+  
+  // 2. ADAPTATION DU CALCUL EN LIGNE : Seuil de tolérance fixé à 12 minutes (720s)
   const onlineScreens = availableScreens.filter(s => {
     if (!s.last_ping) return false;
-    return (now - new Date(s.last_ping).getTime()) / 1000 < 45;
+    return (now - new Date(s.last_ping).getTime()) / 1000 < 720;
   }).length;
 
   useEffect(() => {
@@ -71,13 +75,13 @@ export default function App() {
         if (eventType === 'DELETE') {
           setAvailableScreens(prev => prev.filter(s => s.id !== o.id));
         } else if (eventType === 'INSERT') {
-          setAvailableScreens(prev => [...prev, n as Screen]);
+          setAvailableScreens(prev => [...prev, n as AppScreen]);
         } else {
           setAvailableScreens(prev => {
             const idx = prev.findIndex(s => s.id === n.id);
             if (idx !== -1) {
               const updated = [...prev];
-              updated[idx] = n as Screen;
+              updated[idx] = n as AppScreen;
               return updated;
             }
             return prev;
@@ -159,7 +163,8 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-xl w-full mx-auto px-4 pt-6 pb-24 space-y-6">
+      {/* 3. OUVERTURE DES PORTES DU CONTENEUR : max-w-xl passe à max-w-7xl sur grand écran PC */}
+      <main className="flex-1 w-full max-w-md md:max-w-4xl xl:max-w-7xl mx-auto px-4 pt-6 pb-24 space-y-6">
         <div className="transition-all duration-300 ease-in-out">
           {activeTab === 'accueil' && (
             <Broadcast
@@ -190,6 +195,7 @@ export default function App() {
 
         <footer className="pt-6 opacity-30 text-center">
           <button
+            type="button"
             onClick={hardRefresh}
             className="w-full text-center text-[10px] font-bold text-slate-500 hover:text-slate-300 transition-colors uppercase tracking-widest"
           >
@@ -200,6 +206,7 @@ export default function App() {
 
       <nav className="fixed bottom-5 left-1/2 -translate-x-1/2 w-[90%] max-w-md bg-white/90 backdrop-blur-2xl border border-[#e3dad0] flex justify-around items-center py-2.5 px-3 z-40 shadow-2xl rounded-full shadow-[#b74b1b]/10">
         <button
+          type="button"
           onClick={() => setActiveTab('accueil')}
           className={`flex flex-col items-center gap-1 transition-all py-1.5 px-4 rounded-full ${
             activeTab === 'accueil' 
@@ -219,6 +226,7 @@ export default function App() {
         </button>
         
         <button
+          type="button"
           onClick={() => setActiveTab('appareils')}
           className={`flex flex-col items-center gap-1 transition-all py-1.5 px-4 rounded-full ${
             activeTab === 'appareils' 
@@ -233,6 +241,7 @@ export default function App() {
         </button>
         
         <button
+          type="button"
           onClick={() => setActiveTab('bibliotheque')}
           className={`flex flex-col items-center gap-1 transition-all py-1.5 px-4 rounded-full ${
             activeTab === 'bibliotheque' 
@@ -247,10 +256,10 @@ export default function App() {
         </button>
       </nav>
 
-      {/* LECTEUR VIDÉO NETIF CORRIGÉ : ZÉRO CONTRAINTE DE CACHE POUR S'OUVRIR INSTANTANÉMENT */}
       {playingFile && (
         <div id="videoFullscreenModal" className="fixed inset-0 bg-black/95 backdrop-blur-md z-50 flex flex-col items-center justify-center p-4">
           <button
+            type="button"
             onClick={handleCloseVideo}
             className="absolute top-6 right-6 z-50 bg-white/5 hover:bg-white/10 text-white px-5 py-2.5 rounded-full border border-white/10 backdrop-blur-md transition-all text-xs font-extrabold tracking-widest active:scale-95"
           >

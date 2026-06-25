@@ -61,6 +61,7 @@ export default function Broadcast({
   const [scheduleInputs, setScheduleInputs] = useState<Record<string, { open: string; close: string }>>({});
   const [selectedConfigs, setSelectedConfigs] = useState<Record<string, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [showToast, setShowToast] = useState(false);
 
   const [formatFilter, setFormatFilter] = useState<string>('');
   const [restaurantSearch, setRestaurantSearch] = useState<string>('');
@@ -74,7 +75,7 @@ export default function Broadcast({
   const [videoPickerTarget, setVideoPickerTarget] = useState<string | null>(null);
   const [openedAlbumId, setOpenedAlbumId] = useState<string | null>(null);
 
-  const [activeEdits, setActiveEdits] = useState<Record<string, boolean>>({
+  const [activeEdits, useStateActiveEdits] = useState<Record<string, boolean>>({
     schedule: false,
     audio: false,
     video: false
@@ -211,15 +212,15 @@ export default function Broadcast({
 
   const changeConfigMode = (configId: string, value: 'global' | 'per-screen') => {
     setGroupModes(prev => ({ ...prev, [configId]: value }));
-    setActiveEdits(prev => ({ ...prev, video: true }));
+    useStateActiveEdits(prev => ({ ...prev, video: true }));
   };
 
   const updateAttributionInput = (key: string, value: string) => {
     setAttributionInputs(prev => ({ ...prev, [key]: value }));
     if (key.includes('video')) {
-      setActiveEdits(prev => ({ ...prev, video: true }));
+      useStateActiveEdits(prev => ({ ...prev, video: true }));
     } else if (key.includes('audio')) {
-      setActiveEdits(prev => ({ ...prev, audio: true }));
+      useStateActiveEdits(prev => ({ ...prev, audio: true }));
     }
   };
 
@@ -228,19 +229,27 @@ export default function Broadcast({
       ...prev,
       [configId]: { ...prev[configId], [type]: value }
     }));
-    setActiveEdits(prev => ({ ...prev, schedule: true }));
+    useStateActiveEdits(prev => ({ ...prev, schedule: true }));
   };
 
   const handleFormatChange = (format: string) => {
     setFormatFilter(format);
-    if (format) {
-      const matchingConfigs = localConfigurations.filter(c => c.format === format);
-      const newSelection: Record<string, boolean> = {};
-      matchingConfigs.forEach(c => newSelection[c.id] = true);
-      setSelectedConfigs(newSelection);
-    } else {
-      setSelectedConfigs({});
-    }
+    setSelectedConfigs({});
+  };
+
+  const handleSelectAllFiltered = () => {
+    if (!formatFilter) return;
+    const newSelection: Record<string, boolean> = {};
+    localConfigurations
+      .filter(c => c.format === formatFilter)
+      .forEach(c => {
+        const parentGroup = localGroups.find(g => g.id === c.group_id);
+        const matchSearch = restaurantSearch ? parentGroup?.name.toLowerCase().includes(restaurantSearch.toLowerCase()) : true;
+        if (matchSearch) {
+          newSelection[c.id] = true;
+        }
+      });
+    setSelectedConfigs(newSelection);
   };
 
   const toggleConfigSelection = (configId: string) => {
@@ -372,6 +381,10 @@ export default function Broadcast({
       }
 
       await Promise.all(promises);
+      
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 1500);
+
     } catch (err) {
       console.error(err);
     } finally {
@@ -441,7 +454,7 @@ export default function Broadcast({
                 <input
                   type="checkbox"
                   checked={activeEdits.video}
-                  onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
+                  onChange={(e) => useStateActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
                   className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
                 />
                 <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo Globale</span>
@@ -501,7 +514,7 @@ export default function Broadcast({
                       <input
                         type="checkbox"
                         checked={activeEdits.video}
-                        onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
+                        onChange={(e) => useStateActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
                         className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
                       />
                       <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Écran {localCounter}</span>
@@ -578,7 +591,7 @@ export default function Broadcast({
                 <input
                   type="checkbox"
                   checked={activeEdits.schedule}
-                  onChange={(e) => setActiveEdits(prev => ({ ...prev, schedule: e.target.checked }))}
+                  onChange={(e) => useStateActiveEdits(prev => ({ ...prev, schedule: e.target.checked }))}
                   className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
                 />
                 <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Horaires Restaurant</span>
@@ -618,7 +631,7 @@ export default function Broadcast({
                 <input
                   type="checkbox"
                   checked={activeEdits.audio}
-                  onChange={(e) => setActiveEdits(prev => ({ ...prev, audio: e.target.checked }))}
+                  onChange={(e) => useStateActiveEdits(prev => ({ ...prev, audio: e.target.checked }))}
                   className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
                 />
                 <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Audio d'ambiance</span>
@@ -666,7 +679,7 @@ export default function Broadcast({
                 <input
                   type="checkbox"
                   checked={activeEdits.schedule}
-                  onChange={(e) => setActiveEdits(prev => ({ ...prev, schedule: e.target.checked }))}
+                  onChange={(e) => useStateActiveEdits(prev => ({ ...prev, schedule: e.target.checked }))}
                   className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
                 />
                 <span className="text-[9px] font-extrabold text-[#7c6258] uppercase tracking-widest">Modifier Horaires Communs</span>
@@ -682,7 +695,7 @@ export default function Broadcast({
                     disabled={isSaving}
                     value={scheduleInputs[baseConfigId]?.open || '08:00'}
                     onChange={(e) => updateScheduleInput(baseConfigId, 'open', e.target.value)}
-                    className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
+                    className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -695,7 +708,7 @@ export default function Broadcast({
                     disabled={isSaving}
                     value={scheduleInputs[baseConfigId]?.close || '22:00'}
                     onChange={(e) => updateScheduleInput(baseConfigId, 'close', e.target.value)}
-                    className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none shadow-inner"
+                    className="w-full bg-white border border-[#e3dad0] rounded-xl p-2.5 text-xs text-[#b74b1b] font-bold text-center outline-none cursor-pointer shadow-inner"
                   />
                 </div>
               </div>
@@ -706,7 +719,7 @@ export default function Broadcast({
                 <input
                   type="checkbox"
                   checked={activeEdits.audio}
-                  onChange={(e) => setActiveEdits(prev => ({ ...prev, audio: e.target.checked }))}
+                  onChange={(e) => useStateActiveEdits(prev => ({ ...prev, audio: e.target.checked }))}
                   className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
                 />
                 <span className="text-[9px] font-extrabold text-[#b74b1b] uppercase tracking-widest">Modifier Musique Commune</span>
@@ -730,7 +743,7 @@ export default function Broadcast({
                 <input
                   type="checkbox"
                   checked={activeEdits.video}
-                  onChange={(e) => setActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
+                  onChange={(e) => useStateActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
                   className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
                 />
                 <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo Commune</span>
@@ -776,30 +789,56 @@ export default function Broadcast({
   }
 
   return (
-    <div className="space-y-5 page-content">
+    <div className="space-y-5 page-content relative">
+      
+      {showToast && (
+        <div className="fixed top-6 left-1/2 transform -translate-x-1/2 z-[9999] pointer-events-none transition-all duration-300 ease-out">
+          <div className="bg-[#ff751f] border border-white/20 backdrop-blur-md text-white text-xs font-black px-7 py-4 rounded-3xl shadow-[0_20px_50px_rgba(255,117,31,0.4)] flex items-center gap-3 uppercase tracking-widest border-b-4 border-b-black/20">
+            <span className="text-sm animate-pulse">⚡</span>
+            <span>Succès !</span>
+          </div>
+        </div>
+      )}
+
       {localGroups.length === 0 ? (
         <div className="glass-card p-8 text-center text-xs text-[#7c6258] border border-dashed border-[#e3dad0]">
         </div>
       ) : (
         <div className="space-y-5">
           <div className="glass-card p-5 space-y-4 shadow-md bg-[#faf6f0]/30">
-            <select
-              value={formatFilter}
-              onChange={(e) => handleFormatChange(e.target.value)}
-              className="w-full bg-white border border-[#e3dad0] rounded-2xl p-4 text-xs font-black text-[#b74b1b] outline-none shadow-inner cursor-pointer"
-            >
-              <option value="">1. Filtrer par format d'écran...</option>
-              <option value="1x1">Format 1x1</option>
-              <option value="1x2">Format 1x2</option>
-              <option value="1x3">Format 1x3</option>
-              <option value="1x4">Format 1x4</option>
-              <option value="2x2">Format 2x2</option>
-            </select>
+            
+            <div className="flex flex-col sm:flex-row gap-2 items-center">
+              <select
+                value={formatFilter}
+                onChange={(e) => handleFormatChange(e.target.value)}
+                className="w-full flex-1 bg-white border border-[#e3dad0] rounded-2xl p-4 text-xs font-black text-[#b74b1b] outline-none shadow-inner cursor-pointer"
+              >
+                <option value="">1. Filtrer par format d'écran...</option>
+                <option value="1x1">Format 1x1</option>
+                <option value="1x2">Format 1x2</option>
+                <option value="1x3">Format 1x3</option>
+                <option value="1x4">Format 1x4</option>
+                <option value="2x2">Format 2x2</option>
+              </select>
+
+              {formatFilter && (
+                <button
+                  type="button"
+                  onClick={handleSelectAllFiltered}
+                  className="w-full sm:w-auto px-6 py-4 bg-[#ff751f]/10 border border-[#ff751f]/30 text-[#ff751f] hover:bg-[#ff751f] hover:text-white text-xs font-extrabold rounded-2xl transition-all duration-200 active:scale-95 whitespace-nowrap shadow-sm"
+                >
+                  ✓ Tout cocher
+                </button>
+              )}
+            </div>
 
             <input
               type="text"
               value={restaurantSearch}
-              onChange={(e) => setRestaurantSearch(e.target.value)}
+              onChange={(e) => {
+                setRestaurantSearch(e.target.value);
+                setSelectedConfigs({});
+              }}
               placeholder="2. Rechercher par nom de restaurant..."
               className="w-full bg-white border border-[#e3dad0] rounded-2xl p-4 text-xs placeholder-[#e3dad0]/60 outline-none font-semibold shadow-inner focus:ring-1 focus:ring-[#ff751f]/10"
             />
@@ -919,15 +958,15 @@ export default function Broadcast({
       )}
 
       {selectedCount > 0 && (
-        <div className="pt-3">
+        <div className="pt-6 pb-2">
           <button
             onClick={applyConfig}
             disabled={isSaving}
-            className={`w-full bg-gradient-to-r from-[#ff751f] to-[#b74b1b] text-white py-4.5 rounded-2xl font-black text-xs shadow-lg shadow-[#ff751f]/20 uppercase tracking-widest transition-all duration-300 transform btn-glow ${
-              isSaving ? 'opacity-50 cursor-not-allowed scale-100' : 'hover:opacity-95 hover:scale-[1.01] active:scale-[0.99]'
+            className={`w-full bg-gradient-to-r from-[#ff751f] to-[#b74b1b] text-white py-4.5 px-8 rounded-full font-black text-xs uppercase tracking-[0.2em] transition-all duration-300 active:scale-[0.98] hover:scale-[1.01] hover:shadow-[0_15px_40px_rgba(255,117,31,0.35)] shadow-[0_8px_25px_rgba(255,117,31,0.2)] flex items-center justify-center ${
+              isSaving ? 'opacity-60 cursor-not-allowed' : ''
             }`}
           >
-            {isSaving ? "..." : "Enregistrer"}
+            {isSaving ? "Déploiement..." : "Déployer"}
           </button>
         </div>
       )}

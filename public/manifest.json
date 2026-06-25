@@ -4,7 +4,7 @@
   "description": "Gestionnaire d'écrans KroustyControl",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#4C5454",
+  "background_color": "#ff751f",
   "theme_color": "#ff751f",
   "icons": [
     {

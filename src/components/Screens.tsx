@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 
-interface Screen {
+// EXPORT DU TYPE PERSONNALISÉ POUR ÉVITER LA COLLISION AVEC LE TYPE SCREEN DU NAVIGATEUR
+export interface AppScreen {
   id: string;
   configuration_id: string | null;
   last_ping: string | null;
@@ -26,7 +27,7 @@ interface Configuration {
 }
 
 interface ScreensProps {
-  availableScreens: Screen[];
+  availableScreens: AppScreen[];
   availableGroups: Group[];
   sbClient: any;
   openFolders: Record<string, boolean>;
@@ -47,12 +48,10 @@ export default function Screens({
   const [uploadingImage, setUploadingImage] = useState(false); 
   const [currentFilter, setCurrentFilter] = useState<'all' | 'unassigned'>('all');
 
-  // États synchronisés en temps réel via Supabase Realtime
   const [localGroups, setLocalGroups] = useState<Group[]>(availableGroups);
   const [localConfigurations, setLocalConfigurations] = useState<Configuration[]>([]);
-  const [localScreens, setLocalScreens] = useState<Screen[]>(availableScreens);
+  const [localScreens, setLocalScreens] = useState<AppScreen[]>(availableScreens);
 
-  // Gestion des configurations du restaurant sélectionné
   const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
   const [selectedConfig, setSelectedConfig] = useState<Configuration | null>(null);
   const [newConfigName, setNewConfigName] = useState('');
@@ -74,7 +73,6 @@ export default function Screens({
   const B2_APPLICATION_KEY = "K003nlIsqBOZ/HM0VmU1MafcE62+rYY";
   const B2_BUCKET_ID = "a872d62946a4a7149bed0911";
 
-  // Rafraîchissement du timer interne pour la détection d'état à la seconde
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date().getTime()), 5000);
     return () => clearInterval(interval);
@@ -82,17 +80,14 @@ export default function Screens({
 
   const isScreenOnline = (lastPing: string | null) => {
     if (!lastPing) return false;
-    return (now - new Date(lastPing).getTime()) / 1000 < 45;
+    return (now - new Date(lastPing).getTime()) / 1000 < 720;
   };
 
-  // =========================================================
-  // ⚡ AUTOMATE DE SYNCHRONISATION INSTANTANÉE (REALTIME)
-  // =========================================================
   const refreshAllData = useCallback(async () => {
     try {
       const { data: grp } = await sbClient.from('groups').select('*').order('name', { ascending: true });
       const { data: conf } = await sbClient.from('configurations').select('*').order('name', { ascending: true });
-      const { data: scr } = await sbClient.from('screens_config').select('*').order('id', { ascending: true });
+      const { data: scr = [] } = await sbClient.from('screens_config').select('*').order('id', { ascending: true });
       
       if (grp) setLocalGroups(grp);
       if (conf) setLocalConfigurations(conf);
@@ -105,7 +100,6 @@ export default function Screens({
   useEffect(() => {
     refreshAllData();
 
-    // Souscription globale aux événements Postgres (Insert, Update, Delete)
     const databaseChannel = sbClient
       .channel('table-db-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'groups' }, () => refreshAllData())
@@ -240,7 +234,7 @@ export default function Screens({
   };
 
   const deleteConfiguration = async (configId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+    e.stopPropagation(); 
     if (confirm("Supprimer cette configuration de dalles ?")) {
       await sbClient.from('configurations').delete().eq('id', configId);
       if (selectedConfig?.id === configId) {
@@ -316,7 +310,7 @@ export default function Screens({
 
   let popupGridSlots: React.ReactNode[] = [];
   let currentActiveConfig = selectedConfig ? localConfigurations.find(c => c.id === selectedConfig.id) || selectedConfig : null;
-  let screensInActiveConfig: Screen[] = currentActiveConfig ? localScreens.filter(s => s.configuration_id === currentActiveConfig?.id) : [];
+  let screensInActiveConfig: AppScreen[] = currentActiveConfig ? localScreens.filter(s => s.configuration_id === currentActiveConfig?.id) : [];
 
   if (selectedGroup && currentActiveConfig) {
     const [rows, cols] = currentActiveConfig.format.split('x').map(Number);
@@ -361,6 +355,7 @@ export default function Screens({
                   {fileName && <p className="text-[7px] text-white/50 font-medium truncate px-0.5 mt-0.5 font-mono">{fileName}</p>}
                 </div>
                 <button
+                  type="button"
                   onClick={() => resetScreen(matchedScreen.id)}
                   className="w-full text-center text-[8px] font-black text-white/80 bg-white/10 hover:bg-red-600/80 border border-white/5 py-1 rounded-lg transition-colors uppercase tracking-wider"
                 >
@@ -387,7 +382,7 @@ export default function Screens({
   }
 
   return (
-    <div className="space-y-5 page-content">
+    <div className="space-y-5 page-content w-full max-w-md mx-auto px-1 xl:relative xl:left-1/2 xl:-translate-x-1/2 xl:w-[85vw] xl:max-w-6xl xl:mx-0">
       <div className="flex gap-2.5 items-center">
         <input
           type="text"
@@ -464,7 +459,7 @@ export default function Screens({
       <div className="liveGridContainer">
         {currentFilter === 'unassigned' ? (
           unassignedScreens.length === 0 ? (
-            <div className="glass-card p-8 text-center border border-[#f2ede4] bg-[#faf6f0]/20 rounded-2xl">
+            <div className="glass-card p-8 text-center text-xs text-[#7c6258] border border-dashed border-[#e3dad0]">
               <p className="text-xs text-[#7c6258] font-medium">Aucun écran en attente.</p>
             </div>
           ) : (
@@ -477,6 +472,7 @@ export default function Screens({
                       <span className="font-bold text-xs text-[#b74b1b] truncate">{s.id}</span>
                     </div>
                     <button
+                      type="button"
                       onClick={() => deleteScreen(s.id)}
                       className="text-[9px] font-bold text-red-500 bg-red-500/5 px-2.5 py-1.5 rounded-lg border border-red-500/10 hover:bg-red-500 hover:text-white transition-colors"
                     >
@@ -488,13 +484,12 @@ export default function Screens({
             </div>
           )
         ) : filteredGroups.length === 0 ? (
-          <div className="glass-card p-8 text-center border border-[#f2ede4] bg-[#faf6f0]/20 rounded-2xl">
+          <div className="glass-card p-8 text-center text-xs text-[#7c6258] border border-dashed border-[#e3dad0]">
             <p className="text-xs text-[#7c6258] font-medium">Aucun restaurant trouvé.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-5">
             {filteredGroups.map(group => {
-              // Calcul pro du nombre total d'écrans allumés à travers toutes les configurations du resto
               const configsInGroup = localConfigurations.filter(c => c.group_id === group.id);
               const configIds = configsInGroup.map(c => c.id);
               const screensInGroup = localScreens.filter(s => s.configuration_id && configIds.includes(s.configuration_id));
@@ -511,10 +506,10 @@ export default function Screens({
                     setSelectedGroup(group);
                     setSelectedConfig(null); 
                   }}
-                  className="relative border border-[#f2ede4] hover:border-[#ff751f]/50 rounded-3xl p-4 flex flex-col justify-between items-center text-center shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer select-none h-40 overflow-hidden bg-slate-100 group"
+                  className="relative border border-[#f2ede4] hover:border-[#ff751f]/50 rounded-3xl p-5 flex flex-col justify-between items-center text-center shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer select-none aspect-square w-full overflow-hidden bg-slate-100 group"
                   style={group.image_url ? { backgroundImage: `url(${group.image_url})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}}
                 >
-                  <div className="absolute inset-0 bg-black/35 group-hover:bg-black/45 transition-colors z-0" />
+                  <div className="absolute inset-0 bg-black/40 group-hover:bg-black/55 transition-colors z-0" />
                   
                   <div className="z-10 w-full flex-1 flex flex-col justify-center items-center text-center">
                     <h3 className="text-sm sm:text-base font-black text-[#ff751f] uppercase tracking-wide text-center max-w-full break-words line-clamp-2 px-1 drop-shadow-[0_1.5px_2px_rgba(0,0,0,0.8)]">
@@ -522,7 +517,6 @@ export default function Screens({
                     </h3>
                   </div>
 
-                  {/* AJUSTEMENT PRO : Zéro texte, uniquement le compteur fluide et la lumière verte clignotante */}
                   <div className="z-10 w-full flex justify-center items-center mt-1.5 pt-2 border-t border-white/15">
                     <div className="flex items-center gap-1.5 bg-black/40 border border-white/10 px-3 py-1 rounded-xl shadow-sm">
                       <span className="h-2 w-2 rounded-full bg-[#34C759] pulse-green"></span>
@@ -556,6 +550,7 @@ export default function Screens({
                 <h4 className="text-sm font-black text-[#b74b1b] uppercase truncate ml-1 flex-1">{selectedGroup.name}</h4>
               </div>
               <button
+                type="button"
                 onClick={() => {
                   setSelectedGroup(null);
                   setSelectedConfig(null);
@@ -592,6 +587,7 @@ export default function Screens({
                       <option value="2x2">2x2</option>
                     </select>
                     <button
+                      type="button"
                       onClick={createNewConfiguration}
                       className="bg-[#ff751f] hover:bg-[#b74b1b] text-white font-bold text-xs px-3 rounded-xl transition-all"
                     >
@@ -617,12 +613,16 @@ export default function Screens({
                             <p className="font-bold text-xs text-[#b74b1b] truncate">{config.name}</p>
                             <p className="text-[9px] font-mono font-bold text-[#ff751f] mt-0.5">{config.format} • {screenCount} dalle(s) attachée(s)</p>
                           </div>
-                          <button
-                            onClick={(e) => deleteConfiguration(config.id, e)}
-                            className="text-[10px] p-2 bg-white rounded-xl border border-[#e3dad0] text-red-500 hover:bg-red-500 hover:text-white opacity-0 group-hover/item:opacity-100 transition-all ml-2"
-                          >
-                            🗑
-                          </button>
+                          
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={(e) => deleteConfiguration(config.id, e)}
+                              className="text-[10px] p-2 bg-white rounded-xl border border-[#e3dad0] text-red-500 hover:bg-red-500 hover:text-white sm:opacity-0 group-hover/item:opacity-100 transition-all shadow-sm"
+                            >
+                              🗑
+                            </button>
+                          </div>
                         </div>
                       );
                     })
@@ -631,6 +631,7 @@ export default function Screens({
 
                 <div className="pt-2 border-t border-[#faf6f0] flex justify-start">
                   <button
+                    type="button"
                     onClick={(e) => deleteGroup(selectedGroup.id, e)}
                     className="bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded-xl py-2 px-4 text-[10px] font-black uppercase tracking-wider transition-all border border-red-200/40"
                   >
@@ -641,12 +642,12 @@ export default function Screens({
             ) : (
               // EXÉCUTION VUE B : Gestion de la grille d'écrans de la configuration choisie
               <div className="space-y-4 flex-1 flex flex-col min-h-0">
-                <div className="flex items-center justify-between bg-[#ff751f]/5 border border-[#ff751f]/20 p-2.5 rounded-xl">
-                  <div className="min-w-0">
+                <div className="flex items-center justify-between bg-[#ff751f]/5 border border-[#ff751f]/20 p-2.5 rounded-xl gap-2">
+                  <div className="min-w-0 flex-1">
                     <span className="text-[8px] font-black uppercase tracking-widest text-[#ff751f]">Config Active :</span>
                     <p className="text-xs font-black text-[#b74b1b] truncate">{currentActiveConfig?.name}</p>
                   </div>
-                  <div className="flex gap-2 items-center">
+                  <div className="flex gap-1.5 items-center flex-shrink-0">
                     <select
                       value={currentActiveConfig?.format}
                       onChange={(e) => changeConfigFormat(currentActiveConfig!.id, e.target.value)}
@@ -658,7 +659,9 @@ export default function Screens({
                       <option value="1x4">1x4</option>
                       <option value="2x2">2x2</option>
                     </select>
+
                     <button
+                      type="button"
                       onClick={() => setSelectedConfig(null)}
                       className="text-[10px] font-bold bg-white text-[#7c6258] px-2.5 h-8 rounded-lg border border-[#e3dad0]"
                     >
@@ -678,11 +681,12 @@ export default function Screens({
 
                 <div className="flex gap-2 pt-2 border-t border-[#faf6f0]">
                   <button
+                    type="button"
                     onClick={() => {
                       setSelectedGroup(null);
                       setSelectedConfig(null);
                     }}
-                    className="w-full bg-gradient-to-r from-[#ff751f] to-[#b74b1b] text-white rounded-xl py-2.5 text-[10px] font-black uppercase tracking-wider shadow-md text-center"
+                    className="w-full bg-[#faf6f0] text-[#7c6258] text-xs font-bold py-3.5 rounded-2xl transition-colors hover:bg-[#e3dad0]/40 mt-2"
                   >
                     Fermer la Matrice
                   </button>
@@ -718,6 +722,7 @@ export default function Screens({
               )}
             </div>
             <button
+              type="button"
               onClick={() => {
                 setShowAssignModal(false);
                 setAssignTarget(null);
