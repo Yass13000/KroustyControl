@@ -957,13 +957,16 @@ export default function Broadcast({
         </div>
       )}
 
+      {/* =========================================================================
+          🔥 BOUTON DE DÉPLOIEMENT TACTILE 3D (AVEC PROFONDEUR, GLOW ET APPUYABLE)
+          ========================================================================= */}
       {selectedCount > 0 && (
         <div className="pt-6 pb-2">
           <button
             onClick={applyConfig}
             disabled={isSaving}
-            className={`w-full bg-gradient-to-r from-[#ff751f] to-[#b74b1b] text-white py-4.5 px-8 rounded-full font-black text-xs uppercase tracking-[0.2em] transition-all duration-300 active:scale-[0.98] hover:scale-[1.01] hover:shadow-[0_15px_40px_rgba(255,117,31,0.35)] shadow-[0_8px_25px_rgba(255,117,31,0.2)] flex items-center justify-center ${
-              isSaving ? 'opacity-60 cursor-not-allowed' : ''
+            className={`w-full bg-gradient-to-b from-[#ff8e38] via-[#ff751f] to-[#d64f00] text-white py-5 px-8 rounded-3xl font-black text-xl uppercase tracking-[0.2em] transform transition-all duration-75 border-b-[6px] border-[#912d00] border-t border-t-white/30 hover:shadow-[0_25px_55px_rgba(255,117,31,0.45)] shadow-[0_12px_30px_rgba(255,117,31,0.3)] flex items-center justify-center active:translate-y-[6px] active:border-b-[0px] ${
+              isSaving ? 'opacity-60 cursor-not-allowed pointer-events-none' : 'cursor-pointer'
             }`}
           >
             {isSaving ? "Déploiement..." : "Déployer"}
