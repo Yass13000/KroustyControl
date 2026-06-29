@@ -82,13 +82,15 @@ export default function Broadcast({
   });
 
   const [videoModes, setVideoModes] = useState<Record<string, 'library' | 'manual'>>({});
+  // État local pour stocker la valeur de l'input manuel avant ajout à la playlist
+  const [manualInputs, setManualInputs] = useState<Record<string, string>>({});
   
   const isInitialPopulated = useRef(false);
 
   const transformStorageUrl = (url: string): string => {
     if (!url) return '';
     if (url.includes(',')) {
-      return url.split(',').map(u => transformStorageUrl(u)).join(', ');
+      return url.split(',').map(u => transformStorageUrl(u)).join(',');
     }
     let cleanUrl = url.trim();
 
@@ -259,11 +261,37 @@ export default function Broadcast({
     }));
   };
 
+  // --- NOUVELLES FONCTIONS PLAYLIST ---
   const getVideoNameByUrl = (url: string) => {
     if (!url) return "";
-    const found = allVideos.find(v => v.url === url);
-    return found ? found.name : "Vidéo sélectionnée";
+    const cleanUrl = url.trim();
+    const found = allVideos.find(v => v.url === cleanUrl);
+    return found ? found.name : "Vidéo Externe";
   };
+
+  const getPlaylistUrls = (key: string): string[] => {
+    const raw = attributionInputs[key];
+    if (!raw) return [];
+    return raw.split(',').map(s => s.trim()).filter(s => s !== '');
+  };
+
+  const addVideoToPlaylist = (key: string, newUrl: string) => {
+    const cleanUrl = newUrl.trim();
+    if (!cleanUrl) return;
+    
+    const currentList = getPlaylistUrls(key);
+    // On permet les doublons si l'utilisateur veut lire la même vidéo 2 fois
+    currentList.push(cleanUrl);
+    
+    updateAttributionInput(key, currentList.join(','));
+  };
+
+  const removeVideoFromPlaylist = (key: string, indexToRemove: number) => {
+    const currentList = getPlaylistUrls(key);
+    currentList.splice(indexToRemove, 1);
+    updateAttributionInput(key, currentList.join(','));
+  };
+  // -------------------------------------
 
   const openVideoPicker = (targetKey: string) => {
     setVideoPickerTarget(targetKey);
@@ -272,9 +300,10 @@ export default function Broadcast({
 
   const selectVideoForTarget = (videoUrl: string) => {
     if (!videoPickerTarget) return;
-    updateAttributionInput(videoPickerTarget, videoUrl);
-    setVideoPickerTarget(null);
-    setOpenedAlbumId(null);
+    addVideoToPlaylist(videoPickerTarget, videoUrl);
+    // Ne se ferme plus automatiquement pour permettre la multi-sélection rapide
+    // setVideoPickerTarget(null);
+    // setOpenedAlbumId(null);
   };
 
   const applyConfig = async () => {
@@ -404,6 +433,101 @@ export default function Broadcast({
   const targetConfigIds = Object.keys(selectedConfigs).filter(id => selectedConfigs[id]);
   const selectedCount = targetConfigIds.length;
 
+  // --- RENDER D'UN BLOC PLAYLIST (GLOBAL OU LOCAL) ---
+  const renderPlaylistBlock = (videoKey: string, label: string) => {
+    const playlist = getPlaylistUrls(videoKey);
+    const isManual = videoModes[videoKey] === 'manual';
+    const currentManualInput = manualInputs[videoKey] || '';
+
+    return (
+      <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-3">
+        {/* En-tête du bloc avec checkbox et toggle Manuel/Librairie */}
+        <div className="flex items-center justify-between px-0.5">
+          <div className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={activeEdits.video}
+              onChange={(e) => useStateActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
+              className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
+            />
+            <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">{label}</span>
+          </div>
+          <button
+            type="button"
+            disabled={isSaving}
+            onClick={() => setVideoModes(prev => ({ ...prev, [videoKey]: isManual ? 'library' : 'manual' }))}
+            className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
+          >
+            <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
+            <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
+          </button>
+        </div>
+
+        <div className={`space-y-3 transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
+          
+          {/* AFFICHAGE DES TAGS DE LA PLAYLIST */}
+          {playlist.length > 0 && (
+            <div className="flex flex-wrap gap-2 p-3 bg-white border border-[#e3dad0] rounded-xl shadow-inner max-h-32 overflow-y-auto">
+              {playlist.map((url, idx) => (
+                <div key={`${url}-${idx}`} className="flex items-center bg-[#ff751f]/10 border border-[#ff751f]/30 rounded-lg pr-1">
+                  <span className="text-[10px] font-bold text-[#b74b1b] pl-2 py-1 max-w-[200px] truncate">
+                    {idx + 1}. {getVideoNameByUrl(url)}
+                  </span>
+                  <button 
+                    type="button"
+                    onClick={() => removeVideoFromPlaylist(videoKey, idx)}
+                    className="ml-2 text-[#ff751f] hover:text-red-500 p-1 w-5 h-5 flex items-center justify-center rounded-full hover:bg-red-50 transition-colors"
+                  >
+                    <span className="text-xs font-black">×</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {playlist.length === 0 && (
+            <div className="text-center p-3 text-[10px] text-[#7c6258] font-bold border border-dashed border-[#e3dad0] rounded-xl bg-white/50">
+              Aucune vidéo dans la séquence. L'écran sera noir.
+            </div>
+          )}
+
+          {/* ZONE D'AJOUT (MANUEL OU LIBRAIRIE) */}
+          {isManual ? (
+            <div className="flex gap-2">
+              <input
+                type="text"
+                disabled={isSaving}
+                value={currentManualInput}
+                onChange={(e) => setManualInputs(prev => ({ ...prev, [videoKey]: e.target.value }))}
+                placeholder="URL (Dropbox, Drive, mp4...)"
+                className="flex-1 bg-white border border-[#e3dad0] rounded-xl p-3 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
+              />
+              <button
+                type="button"
+                disabled={!currentManualInput.trim() || isSaving}
+                onClick={() => {
+                  addVideoToPlaylist(videoKey, currentManualInput);
+                  setManualInputs(prev => ({ ...prev, [videoKey]: '' })); // Reset l'input après ajout
+                }}
+                className="bg-[#ff751f] hover:bg-[#d64f00] text-white px-4 rounded-xl text-xs font-black transition-colors disabled:opacity-50"
+              >
+                +
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={isSaving}
+              onClick={() => openVideoPicker(videoKey)}
+              className="w-full bg-white border border-[#ff751f]/40 hover:border-[#ff751f] rounded-xl p-3 text-xs font-black shadow-sm text-center text-[#ff751f] transition-colors"
+            >
+              + Ajouter depuis la Bibliothèque
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   let workspaceContent: React.ReactNode = null;
 
   if (selectedCount === 1) {
@@ -443,58 +567,7 @@ export default function Broadcast({
 
       let inputsHtml: React.ReactNode = null;
       if (currentMode === 'global') {
-        const currentVideoUrl = attributionInputs[videoKey] || '';
-        const isUrlInLibrary = allVideos.some(v => v.url === currentVideoUrl);
-        const isManual = videoModes[videoKey] === 'manual' || (currentVideoUrl !== '' && !isUrlInLibrary && videoModes[videoKey] === undefined);
-
-        inputsHtml = (
-          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
-            <div className="flex items-center justify-between px-0.5">
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="checkbox"
-                  checked={activeEdits.video}
-                  onChange={(e) => useStateActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
-                  className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
-                />
-                <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo Globale</span>
-              </div>
-              <button
-                type="button"
-                disabled={isSaving}
-                onClick={() => setVideoModes(prev => ({ ...prev, [videoKey]: isManual ? 'library' : 'manual' }))}
-                className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
-              >
-                <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
-                <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
-              </button>
-            </div>
-            <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
-              {isManual ? (
-                <input
-                  type="text"
-                  disabled={isSaving}
-                  value={currentVideoUrl}
-                  onChange={(e) => updateAttributionInput(videoKey, e.target.value)}
-                  placeholder="Coller l'URL de votre vidéo ici..."
-                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
-                />
-              ) : (
-                <button
-                  type="button"
-                  disabled={isSaving}
-                  onClick={() => openVideoPicker(videoKey)}
-                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
-                >
-                  <span className="truncate flex-1">
-                    {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir une vidéo..."}
-                  </span>
-                  <span className="text-[#ff751f] text-sm font-black">🖥</span>
-                </button>
-              )}
-            </div>
-          </div>
-        );
+        inputsHtml = renderPlaylistBlock(videoKey, "Séquence Globale (Playlist)");
       } else {
         let localCounter = 1;
         const inputsList: React.ReactNode[] = [];
@@ -503,56 +576,9 @@ export default function Broadcast({
             const s = screensInConfig.find(scr => scr.pos_x === x && scr.pos_y === y);
             if (s) {
               const localVideoKey = `${s.id}-video`;
-              const currentVideoUrl = attributionInputs[localVideoKey] || '';
-              const isUrlInLibrary = allVideos.some(v => v.url === currentVideoUrl);
-              const isManual = videoModes[localVideoKey] === 'manual' || (currentVideoUrl !== '' && !isUrlInLibrary && videoModes[localVideoKey] === undefined);
-
               inputsList.push(
-                <div key={s.id} className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
-                  <div className="flex items-center justify-between px-0.5">
-                    <div className="flex items-center gap-1.5">
-                      <input
-                        type="checkbox"
-                        checked={activeEdits.video}
-                        onChange={(e) => useStateActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
-                        className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
-                      />
-                      <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Écran {localCounter}</span>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={isSaving}
-                      onClick={() => setVideoModes(prev => ({ ...prev, [localVideoKey]: isManual ? 'library' : 'manual' }))}
-                      className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
-                    >
-                      <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
-                      <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
-                    </button>
-                  </div>
-                  <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
-                    {isManual ? (
-                      <input
-                        type="text"
-                        disabled={isSaving}
-                        value={currentVideoUrl}
-                        onChange={(e) => updateAttributionInput(localVideoKey, e.target.value)}
-                        placeholder="Coller l'URL de votre vidéo ici..."
-                        className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={isSaving}
-                        onClick={() => openVideoPicker(localVideoKey)}
-                        className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
-                      >
-                        <span className="truncate flex-1">
-                          {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir une vidéo..."}
-                        </span>
-                        <span className="text-[#ff751f] text-sm font-black">🖥</span>
-                      </button>
-                    )}
-                  </div>
+                <div key={s.id}>
+                  {renderPlaylistBlock(localVideoKey, `Séquence Écran ${localCounter} (Playlist)`)}
                 </div>
               );
             }
@@ -662,9 +688,6 @@ export default function Broadcast({
     if (baseConfig) {
       const audioKey = `${baseConfigId}-restaurant-audio`;
       const videoKey = `${baseConfigId}-global-video`;
-      const currentVideoUrl = attributionInputs[videoKey] || '';
-      const isUrlInLibrary = allVideos.some(v => v.url === currentVideoUrl);
-      const isManual = videoModes[videoKey] === 'manual' || (currentVideoUrl !== '' && !isUrlInLibrary && videoModes[videoKey] === undefined);
 
       workspaceContent = (
         <div className="glass-card p-6 space-y-5 shadow-xl border-2 border-dashed border-[#ff751f]/30 bg-[#ff751f]/5">
@@ -737,51 +760,8 @@ export default function Broadcast({
             </div>
           </div>
 
-          <div className="bg-[#faf6f0]/60 p-4 rounded-2xl border border-[#e3dad0] space-y-2">
-            <div className="flex items-center justify-between px-0.5">
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="checkbox"
-                  checked={activeEdits.video}
-                  onChange={(e) => useStateActiveEdits(prev => ({ ...prev, video: e.target.checked }))}
-                  className="w-3.5 h-3.5 rounded border-[#e3dad0] text-[#ff751f] accent-[#ff751f]"
-                />
-                <span className="text-[9px] font-extrabold text-[#ff751f] uppercase tracking-widest">Vidéo Commune</span>
-              </div>
-              <button
-                type="button"
-                disabled={isSaving}
-                onClick={() => setVideoModes(prev => ({ ...prev, [videoKey]: isManual ? 'library' : 'manual' }))}
-                className="flex items-center gap-0.5 p-0.5 rounded-xl border border-[#e3dad0] bg-[#faf6f0] shadow-inner transition-all active:scale-95"
-              >
-                <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🔗</div>
-                <div className={`px-2 py-1 rounded-lg text-[11px] transition-all duration-200 ${!isManual ? 'bg-white shadow-sm scale-100 opacity-100' : 'opacity-30 scale-95'}`}>🖥</div>
-              </button>
-            </div>
-            <div className={`transition-opacity duration-200 ${!activeEdits.video ? 'opacity-40 pointer-events-none' : ''}`}>
-              {isManual ? (
-                <input
-                  type="text"
-                  disabled={isSaving}
-                  value={currentVideoUrl}
-                  onChange={(e) => updateAttributionInput(videoKey, e.target.value)}
-                  placeholder="Coller l'URL de votre vidéo commune ici..."
-                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs text-[#b74b1b] font-semibold outline-none shadow-inner"
-                />
-              ) : (
-                <button
-                  type="button"
-                  disabled={isSaving}
-                  onClick={() => openVideoPicker(videoKey)}
-                  className="w-full bg-white border border-[#e3dad0] rounded-xl p-3.5 text-xs font-semibold shadow-inner text-left text-[#b74b1b] flex items-center justify-between"
-                >
-                  <span className="truncate flex-1">
-                    {currentVideoUrl ? getVideoNameByUrl(currentVideoUrl) : "Cliquez pour choisir la vidéo commune..."}
-                  </span>
-                  <span className="text-[#ff751f] text-sm font-black">🖥</span>
-                </button>
-              )}
-            </div>
+          <div className="pt-2">
+            {renderPlaylistBlock(videoKey, "Séquence Commune (Playlist)")}
           </div>
         </div>
       );
@@ -885,9 +865,9 @@ export default function Broadcast({
           <div className="bg-white border border-[#f2ede4] w-full max-w-md rounded-3xl p-6 space-y-4 shadow-2xl flex flex-col max-h-[80vh]">
             <div className="flex justify-between items-center border-b border-[#faf6f0] pb-2">
               <div>
-                <h3 className="text-sm font-bold text-[#b74b1b]">Choisir une vidéo</h3>
+                <h3 className="text-sm font-bold text-[#b74b1b]">Ajouter à la playlist</h3>
                 <p className="text-[10px] text-[#7c6258] mt-0.5">
-                  {openedAlbumId ? "Sélectionnez votre fichier :" : "Sélectionnez un dossier :"}
+                  {openedAlbumId ? "Sélectionnez vos fichiers :" : "Sélectionnez un dossier :"}
                 </p>
               </div>
               {openedAlbumId && (
@@ -916,7 +896,7 @@ export default function Broadcast({
                         onClick={() => setOpenedAlbumId(album.id)}
                         className="w-full bg-[#faf6f0]/60 hover:bg-[#ff751f]/5 p-3.5 rounded-2xl border border-[#e3dad0] hover:border-[#ff751f]/30 font-bold text-xs text-[#b74b1b] text-left flex justify-between items-center transition-all"
                       >
-                        <span className="truncate">🖥 {album.name}</span>
+                        <span className="truncate">📁 {album.name}</span>
                         <span className="text-[10px] bg-white border border-[#e3dad0] text-[#ff751f] px-2 py-0.5 rounded-full font-black">
                           {count}
                         </span>
@@ -932,11 +912,23 @@ export default function Broadcast({
                     <button
                       key={video.id}
                       type="button"
-                      onClick={() => selectVideoForTarget(video.url)}
-                      className="w-full bg-[#faf6f0]/60 hover:bg-[#ff751f]/10 p-3 rounded-2xl border border-[#e3dad0] hover:border-[#ff751f]/40 font-bold text-xs text-[#b74b1b] text-left truncate transition-all flex items-center gap-2"
+                      onClick={() => {
+                        selectVideoForTarget(video.url);
+                        // Ajout d'un petit retour visuel au clic sans fermer la popup
+                        const btn = document.getElementById(`btn-${video.id}`);
+                        if(btn) {
+                          btn.style.backgroundColor = 'rgba(255, 117, 31, 0.2)';
+                          setTimeout(() => btn.style.backgroundColor = '', 200);
+                        }
+                      }}
+                      id={`btn-${video.id}`}
+                      className="w-full bg-[#faf6f0]/60 hover:bg-[#ff751f]/10 p-3 rounded-2xl border border-[#e3dad0] hover:border-[#ff751f]/40 font-bold text-xs text-[#b74b1b] text-left truncate transition-all flex items-center justify-between"
                     >
-                      <span className="text-sm">🎬</span>
-                      <span className="truncate flex-1">{video.name}</span>
+                      <div className="flex items-center gap-2 truncate">
+                        <span className="text-sm">🎬</span>
+                        <span className="truncate flex-1">{video.name}</span>
+                      </div>
+                      <span className="text-[#ff751f] text-[10px] font-black opacity-0 group-hover:opacity-100">+ AJOUTER</span>
                     </button>
                   ))
                 )
@@ -949,9 +941,9 @@ export default function Broadcast({
                 setVideoPickerTarget(null);
                 setOpenedAlbumId(null);
               }}
-              className="w-full bg-[#faf6f0] text-[#7c6258] text-xs font-bold py-3.5 rounded-2xl transition-colors hover:bg-[#e3dad0]/40 mt-2"
+              className="w-full bg-[#ff751f] text-white text-xs font-black py-3.5 rounded-2xl transition-colors hover:bg-[#d64f00] mt-2 shadow-md"
             >
-              Fermer
+              Terminer la sélection
             </button>
           </div>
         </div>
