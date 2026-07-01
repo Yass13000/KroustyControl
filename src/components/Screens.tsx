@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 // EXPORT DU TYPE PERSONNALISÉ POUR ÉVITER LA COLLISION AVEC LE TYPE SCREEN DU NAVIGATEUR
 export interface AppScreen {
@@ -112,6 +112,26 @@ export default function Screens({
     };
   }, [sbClient, refreshAllData]);
 
+  // Sécurité Realtime : Ferme automatiquement les fenêtres modales si les données associées disparaissent via un autre appareil
+  useEffect(() => {
+    if (selectedGroup) {
+      const existeEncore = localGroups.some(g => g.id === selectedGroup.id);
+      if (!existeEncore) {
+        setSelectedGroup(null);
+        setSelectedConfig(null);
+      }
+    }
+  }, [localGroups, selectedGroup]);
+
+  useEffect(() => {
+    if (selectedConfig) {
+      const existeEncore = localConfigurations.some(c => c.id === selectedConfig.id);
+      if (!existeEncore) { // CORRECTION DE LA TYPO ICI
+        setSelectedConfig(null);
+      }
+    }
+  }, [localConfigurations, selectedConfig]);
+
   const toggleCreateForm = () => {
     setShowCreateForm(prev => !prev);
   };
@@ -224,21 +244,61 @@ export default function Screens({
 
   const deleteGroup = async (groupId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm("Supprimer ce restaurant ainsi que toutes ses dalles associées ?")) {
-      await sbClient.from('groups').delete().eq('id', groupId);
-      if (selectedGroup?.id === groupId) {
-        setSelectedGroup(null);
-        setSelectedConfig(null);
+    if (confirm("Supprimer ce restaurant ainsi que toutes ses configurations et renvoyer toutes ses dalles en attente ?")) {
+      try {
+        const configIds = localConfigurations.filter(c => c.group_id === groupId).map(c => c.id);
+        
+        if (configIds.length > 0) {
+          await sbClient.from('screens_config')
+            .update({
+              configuration_id: null,
+              total_cols: 1,
+              total_rows: 1,
+              pos_x: 0,
+              pos_y: 0,
+              video_url: '',
+              audio_url: ''
+            })
+            .in('configuration_id', configIds);
+          
+          await sbClient.from('configurations').delete().in('id', configIds);
+        }
+
+        await sbClient.from('groups').delete().eq('id', groupId);
+        
+        if (selectedGroup?.id === groupId) {
+          setSelectedGroup(null);
+          setSelectedConfig(null);
+        }
+      } catch (err) {
+        console.error("Erreur nettoyage cascade groupe :", err);
       }
     }
   };
 
   const deleteConfiguration = async (configId: string, e: React.MouseEvent) => {
     e.stopPropagation(); 
-    if (confirm("Supprimer cette configuration de dalles ?")) {
-      await sbClient.from('configurations').delete().eq('id', configId);
-      if (selectedConfig?.id === configId) {
-        setSelectedConfig(null);
+    if (confirm("Supprimer cette configuration de dalles ? Toutes les dalles rattachées retourneront en attente.")) {
+      try {
+        await sbClient.from('screens_config')
+          .update({
+            configuration_id: null,
+            total_cols: 1,
+            total_rows: 1,
+            pos_x: 0,
+            pos_y: 0,
+            video_url: '',
+            audio_url: ''
+          })
+          .eq('configuration_id', configId);
+
+        await sbClient.from('configurations').delete().eq('id', configId);
+        
+        if (selectedConfig?.id === configId) {
+          setSelectedConfig(null);
+        }
+      } catch (err) {
+        console.error("Erreur nettoyage cascade configuration :", err);
       }
     }
   };
@@ -251,12 +311,37 @@ export default function Screens({
 
   const changeConfigFormat = async (configId: string, nextFormat: string) => {
     try {
+      const [nextRows, nextCols] = nextFormat.split('x').map(Number);
+
+      await sbClient.from('screens_config')
+        .update({
+          configuration_id: null,
+          total_cols: 1,
+          total_rows: 1,
+          pos_x: 0,
+          pos_y: 0,
+          video_url: '',
+          audio_url: ''
+        })
+        .eq('configuration_id', configId)
+        .or(`pos_x.gte.${nextCols},pos_y.gte.${nextRows}`);
+
+      await sbClient.from('screens_config')
+        .update({
+          total_cols: nextCols,
+          total_rows: nextRows
+        })
+        .eq('configuration_id', configId)
+        .lt('pos_x', nextCols)
+        .lt('pos_y', nextRows);
+
       await sbClient.from('configurations').update({ format: nextFormat }).eq('id', configId);
+      
       if (selectedConfig && selectedConfig.id === configId) {
         setSelectedConfig(prev => prev ? { ...prev, format: nextFormat } : null);
       }
     } catch (err) {
-      console.error(err);
+      console.error("Erreur ajustement dynamique format :", err);
     }
   };
 
