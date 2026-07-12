@@ -57,7 +57,6 @@ export default function Screens({
   const [newConfigName, setNewConfigName] = useState('');
   const [newConfigFormat, setNewConfigFormat] = useState('1x1');
 
-  const [b2DownloadToken, setB2DownloadToken] = useState('');
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [assignTarget, setAssignTarget] = useState<{
     configId: string;
@@ -68,10 +67,6 @@ export default function Screens({
   } | null>(null);
 
   const [now, setNow] = useState(new Date().getTime());
-
-  const B2_KEY_ID = "00382696474bd910000000002"; 
-  const B2_APPLICATION_KEY = "K003nlIsqBOZ/HM0VmU1MafcE62+rYY";
-  const B2_BUCKET_ID = "a872d62946a4a7149bed0911";
 
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date().getTime()), 5000);
@@ -126,7 +121,7 @@ export default function Screens({
   useEffect(() => {
     if (selectedConfig) {
       const existeEncore = localConfigurations.some(c => c.id === selectedConfig.id);
-      if (!existeEncore) { // CORRECTION DE LA TYPO ICI
+      if (!existeEncore) {
         setSelectedConfig(null);
       }
     }
@@ -136,39 +131,26 @@ export default function Screens({
     setShowCreateForm(prev => !prev);
   };
 
-  const fetchB2Token = async () => {
-    try {
-      const credentials = btoa(`${B2_KEY_ID}:${B2_APPLICATION_KEY}`);
-      const authRes = await fetch(`https://corsproxy.io/?${encodeURIComponent("https://api.backblazeb2.com/b2api/v2/b2_authorize_account")}`, {
-        method: 'GET',
-        headers: { 'Authorization': `Basic ${credentials}` }
-      });
-      if (!authRes.ok) return;
-      const authData = await authRes.json();
-
-      const tokenRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(`${authData.apiUrl}/b2api/v2/b2_get_download_authorization`)}`, {
-        method: 'POST',
-        headers: { 'Authorization': authData.authorizationToken, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bucketId: B2_BUCKET_ID, fileNamePrefix: "", validDurationInSeconds: 7200 })
-      });
-      if (!tokenRes.ok) return;
-      const tokenData = await tokenRes.json();
-      setB2DownloadToken(tokenData.authorizationToken);
-    } catch (err) {
-      console.error("Erreur d'antenne vidéo:", err);
-    }
-  };
-
-  useEffect(() => {
-    fetchB2Token();
-  }, []);
-
+  // PARSER DE LIENS DIRECTS DROPBOX / GOOGLE DRIVE
   const getAuthenticatedUrl = (url: string) => {
     if (!url) return '';
-    if (url.includes("backblazeb2.com") && !url.includes("Authorization=") && b2DownloadToken) {
-      return `${url}?Authorization=${b2DownloadToken}`;
+    let finalUrl = url.trim();
+    
+    // Traitement des liens Dropbox partagés standard
+    if (finalUrl.includes("dropbox.com") && !finalUrl.includes("raw=1")) {
+      finalUrl = finalUrl.replace("?dl=0", "").replace("&dl=0", "");
+      finalUrl += finalUrl.includes("?") ? "&raw=1" : "?raw=1";
     }
-    return url;
+
+    // Traitement des liens Google Drive partagés standard
+    if (finalUrl.includes("drive.google.com")) {
+      const match = finalUrl.match(/\/d\/(.+?)\/(view|edit)/);
+      if (match && match[1]) {
+        finalUrl = `https://drive.google.com/uc?export=download&id=${match[1]}`;
+      }
+    }
+    
+    return finalUrl;
   };
 
   const uploadRestaurantImage = async (file: File, pathPrefix: string): Promise<string> => {
@@ -410,20 +392,24 @@ export default function Screens({
 
         if (matchedScreen) {
           const fileName = matchedScreen.video_url ? decodeURIComponent(matchedScreen.video_url.split('/').pop()?.split('?')[0] || '') : '';
-          const signedVideoUrl = getAuthenticatedUrl(matchedScreen.video_url || '');
+          const directVideoUrl = getAuthenticatedUrl(matchedScreen.video_url || '');
 
           popupGridSlots.push(
             <div key={matchedScreen.id} className="relative bg-slate-900 border border-white/10 rounded-2xl flex flex-col justify-between h-28 overflow-hidden group/slot">
-              {matchedScreen.video_url && b2DownloadToken && signedVideoUrl && (
+              {matchedScreen.video_url && directVideoUrl && (
                 <video
-                  key={signedVideoUrl} 
-                  src={signedVideoUrl}
+                  key={directVideoUrl} 
+                  src={directVideoUrl}
                   muted
                   autoPlay
                   loop
                   playsInline
                   preload="auto"
-                  className="absolute inset-0 w-full h-full object-cover opacity-45 z-0 pointer-events-none"
+                  className="absolute inset-0 w-full h-full object-cover opacity-0 transition-opacity duration-300 z-0 pointer-events-none"
+                  onLoadedData={(e) => {
+                    e.currentTarget.classList.remove('opacity-0');
+                    e.currentTarget.classList.add('opacity-45');
+                  }}
                 />
               )}
               <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-black/70 z-10 pointer-events-none" />
