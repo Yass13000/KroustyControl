@@ -118,10 +118,39 @@ export default function Maintenance({ groups, configurations, screens, onChanged
 
   /* ------------------------------ Diagnostic ------------------------------ */
 
-  const issues = useMemo(
-    () => diagnose({ screens, configurations, groups, videos: library.videos, media, now, events: journal.events, analyses: analyses.results }),
-    [screens, configurations, groups, library.videos, media, now, journal.events, analyses.results],
-  );
+  // Planificateur des playlists (pg_cron) : vérifie qu'il tourne s'il y a des créneaux actifs.
+  const [scheduler, setScheduler] = useState<{ slots: number; lastRun: string | null } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      const [slots, status] = await Promise.all([
+        sbClient.from('playlist_schedules').select('id', { count: 'exact', head: true }).eq('enabled', true),
+        sbClient.from('scheduler_status').select('last_run').eq('id', 'playlists').maybeSingle(),
+      ]);
+      if (cancelled || slots.error) return; // migration non passée : rien à surveiller
+      setScheduler({ slots: slots.count || 0, lastRun: (status.data as { last_run: string } | null)?.last_run ?? null });
+    };
+    check();
+    const id = setInterval(check, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  const issues = useMemo(() => {
+    const list = diagnose({ screens, configurations, groups, videos: library.videos, media, now, events: journal.events, analyses: analyses.results });
+    if (scheduler && scheduler.slots > 0 && (!scheduler.lastRun || now - new Date(scheduler.lastRun).getTime() > 5 * 60 * 1000)) {
+      list.unshift({
+        id: 'scheduler_down',
+        kind: 'scheduler_down',
+        severity: 'critical',
+        title: 'Programmation à l’arrêt',
+        detail: `${scheduler.slots} créneau${scheduler.slots > 1 ? 'x' : ''} · dernière exécution ${timeAgo(scheduler.lastRun, now)} · vérifier pg_cron`,
+      });
+    }
+    return list;
+  }, [screens, configurations, groups, library.videos, media, now, journal.events, analyses.results, scheduler]);
   const counts = {
     critical: issues.filter(i => i.severity === 'critical').length,
     warning: issues.filter(i => i.severity === 'warning').length,

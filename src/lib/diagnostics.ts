@@ -28,7 +28,8 @@ export type IssueKind =
   | 'heavy_media'
   | 'schedule_mismatch'
   | 'sleep_while_open'
-  | 'awake_while_closed';
+  | 'awake_while_closed'
+  | 'scheduler_down';
 
 export interface Issue {
   id: string;

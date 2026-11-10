@@ -20,6 +20,7 @@ import {
   ChevronLeft,
 } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
+import Schedules from './Schedules';
 import { errorMessage, mustAll, useLibrary } from '../lib/data';
 import { FORMATS, isOnline, parseFormat, parsePlaylist, transformStorageUrl } from '../lib/media';
 import type { AppScreen, Configuration, Group, GroupMode } from '../lib/types';
@@ -247,6 +248,19 @@ export default function Broadcast({
       }
 
       await mustAll(queries);
+
+      // Mémorise la playlist « normale » de chaque mur (rétablie hors créneaux programmés).
+      // Sans incidence si la migration des programmations n'est pas encore passée.
+      if (activeEdits.video) {
+        const globalIds = targetConfigIds.filter(id => selectedCount > 1 || (groupModes[id] || 'global') === 'global');
+        if (globalIds.length > 0) {
+          await sbClient
+            .from('configurations')
+            .update({ default_video_url: transformStorageUrl((attributionInputs[globalVideoKeyOf(targetConfigIds[0])] || '').trim()) })
+            .in('id', globalIds);
+        }
+      }
+
       toast('Déployé');
       onSaved();
     } catch (err) {
@@ -470,6 +484,8 @@ export default function Broadcast({
               <p className="text-sm text-muted">Aucun écran</p>
             )}
           </EditSection>
+
+          <Schedules configId={config.id} videos={library.videos} albums={library.albums} />
         </section>
       );
     }
