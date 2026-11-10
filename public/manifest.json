@@ -1,7 +1,7 @@
 {
-  "name": "KroustyControl",
-  "short_name": "KroustyControl",
-  "description": "Pilotage des écrans KroustyControl",
+  "name": "SYNK",
+  "short_name": "SYNK",
+  "description": "Pilotage et synchronisation des murs d’écrans",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

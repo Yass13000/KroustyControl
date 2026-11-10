@@ -4,8 +4,8 @@ Gratuit, sans carte bancaire, sans ligne de commande. Compter environ 5 minutes.
 
 ## 1. Créer l'app Dropbox
 1. Aller sur https://www.dropbox.com/developers/apps (connecté avec le compte Dropbox qui héberge les vidéos).
-2. **Create app** → **Scoped access** → **App folder** → nom : `KroustyControl`.
-   Les vidéos envoyées iront dans `Applications/KroustyControl/videos` ; l'app n'a accès qu'à ce dossier.
+2. **Create app** → **Scoped access** → **App folder** → nom au choix (ex. `SynKwall`).
+   Les vidéos envoyées iront dans `Applications/<nom de l'app>/videos` ; l'app n'a accès qu'à ce dossier.
 3. Onglet **Permissions** : cocher `account_info.read`, `files.content.read`, `files.content.write`,
    `sharing.read`, `sharing.write`, puis **Submit**.
 4. Onglet **Settings** : noter l'**App key** et l'**App secret**.

@@ -127,7 +127,7 @@ const safeName = (name: string) => {
 };
 
 /**
- * Envoie un fichier dans Applications/KroustyControl/videos et renvoie son lien de lecture directe.
+ * Envoie un fichier dans Applications/<app Dropbox>/videos et renvoie son lien de lecture directe.
  * `onProgress` reçoit une valeur entre 0 et 1.
  */
 export async function uploadVideo(file: File, onProgress: (p: number) => void, signal?: AbortSignal): Promise<string> {

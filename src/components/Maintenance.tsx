@@ -317,7 +317,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
 
   const globalReport = () =>
     [
-      `KroustyControl · rapport du ${stamp()}`,
+      `SYNK · rapport du ${stamp()}`,
       `${onlineCount}/${screens.length} écrans en ligne · vidéos OK ${mediaOk}/${allUrls.length}`,
       `${counts.critical} critique(s) · ${counts.warning} à surveiller · ${counts.info} info(s)`,
       '',

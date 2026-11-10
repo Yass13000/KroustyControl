@@ -11,14 +11,14 @@ import Videos from './components/Videos';
 import Maintenance from './components/Maintenance';
 import { diagnose } from './lib/diagnostics';
 import Splash from './components/Splash';
-import KroustyLogo from './components/KroustyLogo';
+import SynkLogo from './components/SynkLogo';
 import { Button, FeedbackProvider, IconButton, Input, cn, useFeedback } from './components/ui';
 
 export type { AppScreen } from './lib/types';
 
 type Tab = 'accueil' | 'appareils' | 'bibliotheque' | 'maintenance';
 
-const SPLASH_MIN_MS = 3300;
+const SPLASH_MIN_MS = 3500;
 const SPLASH_FADE_MS = 550;
 const TAB_STORAGE_KEY = 'krousty.tab';
 
@@ -98,7 +98,7 @@ function Login({ onLogged }: { onLogged: (u: User) => void }) {
     <div className="flex min-h-[100dvh] flex-col items-center justify-center px-4 py-10">
       <div className="w-full max-w-sm overflow-hidden rounded-[32px] border border-sand bg-white shadow-lift animate-in fade-in slide-in-from-bottom-4 duration-500">
         <div className="relative bg-brand-logo px-8 pb-9 pt-8">
-          <KroustyLogo className="mx-auto w-full max-w-[230px]" />
+          <SynkLogo variant="onBrand" className="mx-auto w-full max-w-[220px]" />
           <Wave className="absolute inset-x-0 -bottom-px h-4 w-full" fill="#ffffff" />
         </div>
 
@@ -239,7 +239,7 @@ export function Main({ user }: { user: User }) {
             <LogOut className="h-4.5 w-4.5" />
           </button>
 
-          <KroustyLogo className="w-[170px] md:w-[210px]" />
+          <SynkLogo variant="onBrand" className="w-[150px] md:w-[180px]" />
 
           <div className="mt-2 inline-flex items-center gap-3 rounded-full bg-black/15 px-3.5 py-1.5 text-sm font-bold tabular-nums text-white">
             <span className="inline-flex items-center gap-1.5" title="En ligne">

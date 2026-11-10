@@ -1,6 +1,6 @@
-# 🛠️ Guide des commandes Terminal pour KroustyControl (macOS)
+# 🛠️ SYNK — guide des commandes Terminal (macOS)
 
-Ce guide regroupe toutes les commandes terminal indispensables pour développer, tester et maintenir le projet **KroustyControl** sur macOS.
+Ce guide regroupe toutes les commandes terminal indispensables pour développer, tester et maintenir le projet **SYNK** sur macOS.
 
 ---
 

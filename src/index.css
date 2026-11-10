@@ -97,7 +97,7 @@
   transform: translateX(120%);
 }
 
-/* ============================== SPLASH ============================== */
+/* ============================== SPLASH SYNK ============================== */
 .splash {
   position: fixed;
   inset: 0;
@@ -106,8 +106,7 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background:
-    radial-gradient(120% 80% at 50% 38%, #2a1309 0%, #140a06 55%, #0b0604 100%);
+  background: radial-gradient(120% 80% at 50% 40%, #2a1309 0%, #140a06 55%, #0b0604 100%);
   transition: opacity 0.6s ease, transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .splash.is-leaving {
@@ -115,198 +114,131 @@
   transform: scale(1.04);
   pointer-events: none;
 }
-.splash-wall-svg {
-  width: min(92vw, 560px);
-  height: auto;
-  margin-top: -8vh;
-  overflow: visible;
+.splash-halo {
+  position: absolute;
+  width: 120vmin;
+  height: 120vmin;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 117, 31, 0.32) 0%, rgba(255, 117, 31, 0) 60%);
+  animation: sp-halo 1.6s ease-out 0.4s both;
 }
-.splash-wall-in {
-  transform-origin: 200px 130px;
-  animation: splash-wall-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both;
-}
-@keyframes splash-wall-in {
+@keyframes sp-halo {
   from {
     opacity: 0;
-    transform: scale(0.86);
+    transform: scale(0.4);
   }
   to {
     opacity: 1;
     transform: scale(1);
   }
 }
-
-/* ============================ LOGO VECTORIEL ============================ */
-.kl {
+.splash-lockup {
   position: relative;
-  aspect-ratio: 826 / 331;
-  container-type: inline-size;
-  user-select: none;
-}
-.kl-shapes {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-.kl-shapes > * {
-  transform-box: fill-box;
-  transform-origin: center;
-}
-.kl-top,
-.kl-bottom {
-  position: absolute;
   display: flex;
-  justify-content: space-between;
-  color: #fff;
-  font-family: 'Rubik', 'Outfit', system-ui, sans-serif;
-  line-height: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: 26px;
+  margin-top: -6vh;
 }
-.kl-top {
-  left: 3.6%;
-  width: 92%;
-  top: 18.5%;
-  font-size: 18.6cqw;
-  font-weight: 900;
-  letter-spacing: -0.01em;
-  transform: rotate(-3.2deg) scaleY(1.27);
-  transform-origin: left center;
-}
-.kl-bottom {
-  left: 29.5%;
-  width: 42%;
-  top: 54%;
-  font-size: 12cqw;
-  font-weight: 900;
-  transform: rotate(-2.2deg) scaleY(1.15);
-  transform-origin: left center;
-}
-.kl-letter,
-.kl-sub {
-  display: inline-block;
-  transform-origin: 50% 80%;
-}
-.kl-shine {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-.kl-shine::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 18%;
-  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.5), transparent);
-  transform: translateX(-120%) skewX(-18deg);
-  opacity: 0;
+.splash-mark {
+  width: min(44vw, 190px);
+  height: auto;
+  overflow: visible;
+  filter: drop-shadow(0 18px 40px rgba(255, 117, 31, 0.35));
 }
 
-/* --- Animation d'entrée (uniquement avec .is-animated) --- */
-.kl.is-animated .kl-plate {
-  animation: kl-plate 0.75s cubic-bezier(0.34, 1.56, 0.64, 1) 0.1s both;
+/* 1. Un écran s'allume au centre, puis les 4 prennent leur place */
+.sp-tile {
+  transform-box: view-box;
+  animation:
+    sp-tile-in 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) 0.15s both,
+    sp-tile-split 0.7s cubic-bezier(0.65, 0, 0.35, 1) calc(0.75s + var(--i) * 0.05s) both;
 }
-.kl.is-animated .kl-shadow {
-  animation: kl-shadow 0.45s ease-out 0.6s both;
-}
-.kl.is-animated .kl-banner {
-  transform-origin: left center;
-  animation: kl-banner 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.45s both;
-}
-.kl.is-animated .kl-letter {
-  animation: kl-letter 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) calc(0.75s + var(--i) * 0.07s) both,
-    kl-wave 2.8s ease-in-out calc(2.3s + var(--i) * 0.12s) infinite none;
-}
-.kl.is-animated .kl-sub {
-  animation: kl-sub 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) calc(1.3s + var(--i) * 0.05s) both;
-}
-.kl.is-animated .kl-shine::before {
-  animation: kl-shine 0.9s ease-in-out 1.75s both;
-}
-
-@keyframes kl-plate {
-  0% {
-    opacity: 0;
-    transform: translateY(30%) scale(0.2) rotate(-14deg);
-  }
-  65% {
-    opacity: 1;
-    transform: translateY(-3%) scale(1.06) rotate(2deg);
-  }
-  100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-@keyframes kl-shadow {
+@keyframes sp-tile-in {
   from {
     opacity: 0;
-    transform: translate(-3%, -3%);
+    transform: translate(var(--dx), var(--dy)) scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: translate(var(--dx), var(--dy)) scale(1);
+  }
+}
+@keyframes sp-tile-split {
+  from {
+    transform: translate(var(--dx), var(--dy));
+  }
+  to {
+    transform: translate(0, 0);
+  }
+}
+
+/* 2. Les flèches se dessinent… */
+.sp-arc {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: sp-draw 0.6s cubic-bezier(0.65, 0, 0.35, 1) 1.45s forwards;
+}
+@keyframes sp-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.sp-head {
+  opacity: 0;
+  animation: sp-head 0.25s ease-out 1.95s forwards;
+}
+@keyframes sp-head {
+  to {
+    opacity: 1;
+  }
+}
+
+/* 3. …puis font un tour complet : la synchro (toujours découpées par les écrans) */
+.sp-arrows {
+  transform-box: view-box;
+  transform-origin: 50px 50px;
+  animation: sp-spin 1s cubic-bezier(0.65, 0, 0.35, 1) 2.2s both;
+}
+@keyframes sp-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.sp-sheen {
+  animation: sp-sheen 0.9s ease-in-out 2.45s both;
+}
+@keyframes sp-sheen {
+  from {
+    transform: skewX(-18deg) translateX(0);
+  }
+  to {
+    transform: skewX(-18deg) translateX(190px);
+  }
+}
+
+/* 4. Le nom (lettres dessinées) apparaît lettre par lettre */
+.splash-word {
+  width: min(56vw, 250px);
+  height: auto;
+  overflow: visible;
+}
+.splash-word .wm-letter {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: sp-letter 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) calc(1.75s + var(--i) * 0.09s) both;
+}
+@keyframes sp-letter {
+  from {
+    opacity: 0;
+    transform: translateY(40%) scale(0.85);
   }
   to {
     opacity: 1;
     transform: none;
-  }
-}
-@keyframes kl-banner {
-  0% {
-    opacity: 0;
-    transform: scaleX(0) rotate(-6deg);
-  }
-  70% {
-    opacity: 1;
-    transform: scaleX(1.03) rotate(0.5deg);
-  }
-  100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-@keyframes kl-letter {
-  0% {
-    opacity: 0;
-    transform: translateY(-70%) scale(0.2) rotate(-25deg);
-  }
-  70% {
-    opacity: 1;
-    transform: translateY(4%) scale(1.12) rotate(4deg);
-  }
-  100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-@keyframes kl-sub {
-  0% {
-    opacity: 0;
-    transform: translateY(70%) scale(0.6);
-  }
-  100% {
-    opacity: 1;
-    transform: none;
-  }
-}
-@keyframes kl-wave {
-  0%,
-  60%,
-  100% {
-    transform: none;
-  }
-  30% {
-    transform: translateY(-7%) rotate(-3deg);
-  }
-}
-@keyframes kl-shine {
-  0% {
-    opacity: 1;
-    transform: translateX(-120%) skewX(-18deg);
-  }
-  100% {
-    opacity: 1;
-    transform: translateX(650%) skewX(-18deg);
   }
 }
 
