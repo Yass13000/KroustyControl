@@ -36,6 +36,7 @@ import {
   type Severity,
 } from '../lib/diagnostics';
 import type { AppScreen, Configuration, Group, ScreenCommand, ScreenEvent } from '../lib/types';
+import PlayerUpdates from './PlayerUpdates';
 import { Button, EmptyState, IconButton, Modal, PageTitle, Segmented, StatusDot, cn, useFeedback } from './ui';
 
 interface MaintenanceProps {
@@ -479,6 +480,9 @@ export default function Maintenance({ groups, configurations, screens, onChanged
           })}
         </ul>
       </section>
+
+      {/* --- Mises à jour des lecteurs --- */}
+      <PlayerUpdates screens={screens} groups={groups} configurations={configurations} now={now} onChanged={onChanged} />
 
       {/* --- Historique (journal en base) ou activité de la session --- */}
       <section className="space-y-3">

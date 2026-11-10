@@ -33,6 +33,9 @@ export interface AppScreen {
   // Veille hors horaires (lecteur 1.2+, migration 20261110_sleep.sql)
   power_state?: string | null;
   power_state_at?: string | null;
+  // Mise à jour à distance du lecteur (migration 20261111_player_updates.sql)
+  update_state?: string | null;
+  update_state_at?: string | null;
 }
 
 export type ScreenEventKind = 'outage' | 'boot' | 'error' | 'command' | 'content' | 'assign' | 'power';
