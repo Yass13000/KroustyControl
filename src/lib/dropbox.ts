@@ -29,7 +29,11 @@ async function authHeaders() {
 export async function connectUrl(): Promise<string> {
   const res = await fetch('/api/dropbox-connect', { headers: await authHeaders() });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok || !body.url) throw new Error('Impossible d’ouvrir Dropbox');
+  if (!res.ok || !body.url) {
+    throw new Error(
+      body.error === 'forbidden' ? 'Réservé aux administrateurs' : body.error === 'unauthorized' ? 'Session expirée : se reconnecter' : `Impossible d’ouvrir Dropbox (${res.status})`,
+    );
+  }
   return body.url;
 }
 
@@ -42,17 +46,22 @@ export async function connectWithCode(code: string) {
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(
-      body.error === 'invalid_code'
-        ? 'Code refusé ou expiré : recommencez l’autorisation'
-        : body.error === 'storage_failed'
-          ? 'Enregistrement refusé : vérifier SUPABASE_SERVICE_ROLE_KEY (clé service_role) dans Vercel'
-          : body.error === 'forbidden'
-            ? 'Réservé aux administrateurs'
-            : body.error === 'not_configured'
-              ? `Variable manquante dans Vercel : ${(body.missing || []).join(', ')}`
-              : `Erreur ${res.status}`,
-    );
+    const detail = typeof body.detail === 'string' ? ` (${body.detail.slice(0, 160)})` : '';
+    const message =
+      body.error === 'invalid_client'
+        ? 'Dropbox refuse la clé ou le secret : vérifier DROPBOX_APP_KEY / DROPBOX_APP_SECRET dans Vercel, puis Redeploy'
+        : body.error === 'invalid_code'
+          ? 'Code refusé ou déjà utilisé : refaire « Autoriser » et coller le nouveau code'
+          : body.error === 'storage_failed'
+            ? 'Enregistrement refusé par Supabase : vérifier SUPABASE_SERVICE_ROLE_KEY dans Vercel'
+            : body.error === 'forbidden'
+              ? 'Réservé aux administrateurs'
+              : body.error === 'unauthorized'
+                ? 'Session expirée : se déconnecter puis se reconnecter'
+                : body.error === 'not_configured'
+                  ? `Variable manquante dans Vercel : ${(body.missing || []).join(', ')}`
+                  : `Erreur ${res.status}`;
+    throw new Error(`${message}${detail}`);
   }
   cached = null;
 }

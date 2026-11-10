@@ -119,6 +119,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   const [uploadUnavailable, setUploadUnavailable] = useState<{ message: string; state: SetupState } | null>(null);
   const [connectCode, setConnectCode] = useState('');
   const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -198,26 +199,28 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   const openDropboxAuthorize = async () => {
     // Onglet ouvert tout de suite (sinon Safari le bloque comme pop-up), puis dirigé vers Dropbox.
     const tab = window.open('about:blank', '_blank');
+    setConnectError(null);
     try {
       const url = await connectUrl();
       if (tab) tab.location.href = url;
       else window.location.href = url;
     } catch (err) {
       tab?.close();
-      toast(errorMessage(err), 'error');
+      setConnectError(errorMessage(err));
     }
   };
 
   const submitConnectCode = async () => {
     if (!connectCode.trim()) return;
     setConnecting(true);
+    setConnectError(null);
     try {
       await connectWithCode(connectCode);
       setConnectCode('');
       toast('Dropbox connecté');
       setSetupCheck(n => n + 1);
     } catch (err) {
-      toast(errorMessage(err), 'error');
+      setConnectError(errorMessage(err));
     } finally {
       setConnecting(false);
     }
@@ -610,6 +613,11 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                     OK
                   </Button>
                 </div>
+                {connectError && (
+                  <p className="break-words rounded-xl bg-red-50 px-3 py-2.5 text-sm font-semibold text-red-700" role="alert">
+                    {connectError}
+                  </p>
+                )}
               </div>
             ) : uploadUnavailable ? (
               <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">{uploadUnavailable.message}</p>

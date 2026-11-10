@@ -10,7 +10,7 @@ export const json = (body: unknown, status = 200) =>
 
 /** Variables Vercel manquantes (le jeton de renouvellement peut aussi venir de la base). */
 export function missingEnv() {
-  return ['DROPBOX_APP_KEY', 'DROPBOX_APP_SECRET', 'SUPABASE_SERVICE_ROLE_KEY'].filter(k => !process.env[k]);
+  return ['DROPBOX_APP_KEY', 'DROPBOX_APP_SECRET', 'SUPABASE_SERVICE_ROLE_KEY'].filter(k => !(process.env[k] || '').trim());
 }
 
 /** Aide au diagnostic : NOMS des variables Supabase/Dropbox visibles (jamais leurs valeurs). */
@@ -50,13 +50,16 @@ export async function readSetting(key: string): Promise<string | null> {
   return rows[0]?.value ?? null;
 }
 
-export async function writeSetting(key: string, value: string): Promise<boolean> {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/app_settings`, {
+export async function writeSetting(key: string, value: string): Promise<{ ok: boolean; detail?: string }> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/app_settings?on_conflict=key`, {
     method: 'POST',
-    headers: { ...service(), 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+    headers: { ...service(), 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
     body: JSON.stringify({ key, value, updated_at: new Date().toISOString() }),
   });
-  return res.ok;
+  return res.ok ? { ok: true } : { ok: false, detail: `${res.status} ${(await res.text()).slice(0, 200)}` };
 }
 
-export const dropboxBasicAuth = () => `Basic ${btoa(`${process.env.DROPBOX_APP_KEY}:${process.env.DROPBOX_APP_SECRET}`)}`;
+/** Valeur d'une variable Vercel sans espaces ni retours à la ligne collés par erreur. */
+export const env = (name: string) => (process.env[name] || '').trim();
+
+export const dropboxBasicAuth = () => `Basic ${btoa(`${env('DROPBOX_APP_KEY')}:${env('DROPBOX_APP_SECRET')}`)}`;
