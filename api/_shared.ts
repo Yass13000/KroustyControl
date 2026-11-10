@@ -13,6 +13,11 @@ export function missingEnv() {
   return ['DROPBOX_APP_KEY', 'DROPBOX_APP_SECRET', 'SUPABASE_SERVICE_ROLE_KEY'].filter(k => !process.env[k]);
 }
 
+/** Aide au diagnostic : NOMS des variables Supabase/Dropbox visibles (jamais leurs valeurs). */
+export function visibleEnvNames() {
+  return Object.keys(process.env).filter(k => /SUPABASE|DROPBOX/i.test(k)).sort();
+}
+
 const service = () => {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
   return { apikey: key, Authorization: `Bearer ${key}` };

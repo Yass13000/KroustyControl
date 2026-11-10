@@ -5,11 +5,11 @@
  * Variables Vercel : DROPBOX_APP_KEY, DROPBOX_APP_SECRET, SUPABASE_SERVICE_ROLE_KEY.
  * Jeton de renouvellement : DROPBOX_REFRESH_TOKEN (Vercel) ou enregistré par « Connecter Dropbox ».
  */
-import { dropboxBasicAuth, json, missingEnv, readSetting, requireAdmin } from './_shared.js';
+import { dropboxBasicAuth, json, missingEnv, readSetting, requireAdmin, visibleEnvNames } from './_shared.js';
 
 export async function POST(request: Request): Promise<Response> {
   const missing = missingEnv();
-  if (missing.length) return json({ error: 'not_configured', missing }, 503);
+  if (missing.length) return json({ error: 'not_configured', missing, visible: visibleEnvNames() }, 503);
 
   const denied = await requireAdmin(request);
   if (denied) return denied;

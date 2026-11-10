@@ -3,11 +3,11 @@
  *   GET  → adresse d'autorisation Dropbox à ouvrir
  *   POST { code } → échange le code contre un jeton de renouvellement, enregistré dans app_settings
  */
-import { dropboxBasicAuth, json, missingEnv, requireAdmin, writeSetting } from './_shared.js';
+import { dropboxBasicAuth, json, missingEnv, requireAdmin, visibleEnvNames, writeSetting } from './_shared.js';
 
 export async function GET(request: Request): Promise<Response> {
   const missing = missingEnv();
-  if (missing.length) return json({ error: 'not_configured', missing }, 503);
+  if (missing.length) return json({ error: 'not_configured', missing, visible: visibleEnvNames() }, 503);
   const denied = await requireAdmin(request);
   if (denied) return denied;
 
@@ -20,7 +20,7 @@ export async function GET(request: Request): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
   const missing = missingEnv();
-  if (missing.length) return json({ error: 'not_configured', missing }, 503);
+  if (missing.length) return json({ error: 'not_configured', missing, visible: visibleEnvNames() }, 503);
   const denied = await requireAdmin(request);
   if (denied) return denied;
 
