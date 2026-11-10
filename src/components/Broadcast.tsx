@@ -29,6 +29,8 @@ import type { AppScreen, Configuration, Group, GroupMode } from '../lib/types';
 import { Badge, Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Spinner, StatusDot, Switch, cn, useFeedback } from './ui';
 
 interface BroadcastProps {
+  /** Mur à ouvrir directement (depuis le tableau de bord) */
+  focusConfigId?: string | null;
   groups: Group[];
   configurations: Configuration[];
   screens: AppScreen[];
@@ -49,6 +51,7 @@ const screenVideoKeyOf = (screenId: string) => `${screenId}-video`;
 const hhmm = (t: string | null | undefined, fallback: string) => (t ? t.slice(0, 5) : fallback);
 
 export default function Broadcast({
+  focusConfigId = null,
   groups,
   configurations,
   screens,
@@ -64,7 +67,7 @@ export default function Broadcast({
   const library = useLibrary();
 
   const [scheduleInputs, setScheduleInputs] = useState<Record<string, { open: string; close: string }>>({});
-  const [selectedConfigs, setSelectedConfigs] = useState<Record<string, boolean>>({});
+  const [selectedConfigs, setSelectedConfigs] = useState<Record<string, boolean>>(() => (focusConfigId ? { [focusConfigId]: true } : {}));
   const [isSaving, setIsSaving] = useState(false);
   const [formatFilter, setFormatFilter] = useState('');
   const [restaurantSearch, setRestaurantSearch] = useState('');
@@ -112,6 +115,13 @@ export default function Broadcast({
       return changed ? next : prev;
     });
   }, [configurations, screens, groupById, setAttributionInputs]);
+
+  // Mur ouvert depuis le tableau de bord : on fait défiler jusqu'à son réglage.
+  useEffect(() => {
+    if (!focusConfigId) return;
+    const t = setTimeout(() => document.getElementById('broadcast-workspace')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 350);
+    return () => clearTimeout(t);
+  }, [focusConfigId]);
 
   // Client avec une seule configuration : pré-sélection automatique.
   useEffect(() => {
@@ -442,7 +452,7 @@ export default function Broadcast({
       }
 
       workspace = (
-        <section className="card space-y-5 p-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <section id="broadcast-workspace" className="scroll-mt-4 card space-y-5 p-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-sand pb-4">
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-muted">{group?.name}</p>

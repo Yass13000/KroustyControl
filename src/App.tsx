@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
-import { AlertCircle, Clapperboard, Moon, Stethoscope, Eye, EyeOff, Lock, LogOut, Mail, Monitor, MonitorPlay, RotateCcw, ShieldCheck, Store, X } from 'lucide-react';
+import { AlertCircle, Clapperboard, House, Moon, Rocket, Stethoscope, Eye, EyeOff, Lock, LogOut, Mail, Monitor, MonitorPlay, RotateCcw, ShieldCheck, X } from 'lucide-react';
 import { sbAuth } from './lib/supabase';
 import { useFleetData, useNow } from './lib/data';
 import { isOnline } from './lib/media';
@@ -8,6 +8,7 @@ import type { GroupMode } from './lib/types';
 import Broadcast from './components/Broadcast';
 import Screens from './components/Screens';
 import Videos from './components/Videos';
+import Dashboard from './components/Dashboard';
 import Maintenance from './components/Maintenance';
 import { diagnose } from './lib/diagnostics';
 import Splash from './components/Splash';
@@ -16,11 +17,10 @@ import { Button, FeedbackProvider, IconButton, Input, cn, useFeedback } from './
 
 export type { AppScreen } from './lib/types';
 
-type Tab = 'accueil' | 'appareils' | 'bibliotheque' | 'maintenance';
+type Tab = 'dashboard' | 'accueil' | 'appareils' | 'bibliotheque' | 'maintenance';
 
 const SPLASH_MIN_MS = 3500;
 const SPLASH_FADE_MS = 550;
-const TAB_STORAGE_KEY = 'krousty.tab';
 
 export default function App() {
   return (
@@ -166,15 +166,14 @@ export function Main({ user }: { user: User }) {
   const fleet = useFleetData(user);
   const now = useNow(15000);
 
-  const [activeTab, setActiveTab] = useState<Tab>(() => {
-    try {
-      const saved = localStorage.getItem(TAB_STORAGE_KEY);
-      if (saved === 'accueil' || saved === 'appareils' || saved === 'bibliotheque' || saved === 'maintenance') return saved;
-    } catch {
-      /* stockage indisponible */
-    }
-    return 'appareils';
-  });
+  // À chaque ouverture de l'app : le tableau de bord.
+  const [activeTab, setActiveTab] = useState<Tab>('dashboard');
+  // Mur à ouvrir directement dans « Diffuser » (depuis le tableau de bord).
+  const [focusConfigId, setFocusConfigId] = useState<string | null>(null);
+  const displayName = (() => {
+    const base = (user.email || '').split('@')[0].split(/[._-]/)[0].replace(/\d+$/, '');
+    return base ? base.charAt(0).toUpperCase() + base.slice(1) : '';
+  })();
 
   // État conservé entre les onglets (saisies du module de diffusion).
   const [attributionInputs, setAttributionInputs] = useState<Record<string, string>>({});
@@ -182,11 +181,6 @@ export function Main({ user }: { user: User }) {
   const [playingVideoSrc, setPlayingVideoSrc] = useState<string | null>(null);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(TAB_STORAGE_KEY, activeTab);
-    } catch {
-      /* stockage indisponible */
-    }
     window.scrollTo({ top: 0 });
   }, [activeTab]);
 
@@ -227,46 +221,68 @@ export function Main({ user }: { user: User }) {
 
   return (
     <div className="relative flex min-h-[100dvh] flex-col">
-      <header className="relative z-10 flex-shrink-0 bg-brand-logo px-5 pb-6 pt-[max(1rem,env(safe-area-inset-top))]">
-        <div className="relative mx-auto flex max-w-xl flex-col items-center">
-          <button
-            type="button"
-            onClick={handleLogout}
-            aria-label="Se déconnecter"
-            title="Se déconnecter"
-            className="absolute right-0 top-1 inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/15 text-white transition hover:bg-black/25 active:scale-95"
-          >
-            <LogOut className="h-4.5 w-4.5" />
-          </button>
+      {/* En-tête compact : logo à gauche, état et déconnexion à droite, sur une seule ligne */}
+      <header className="relative z-10 flex-shrink-0 bg-brand-logo px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+        <div className="mx-auto flex max-w-md items-center gap-3 md:max-w-4xl xl:max-w-6xl">
+          <SynkLogo variant="onBrand" className="w-[104px] flex-shrink-0 md:w-[132px]" />
 
-          <SynkLogo variant="onBrand" className="w-[150px] md:w-[180px]" />
-
-          <div className="mt-2 inline-flex items-center gap-3 rounded-full bg-black/15 px-3.5 py-1.5 text-sm font-bold tabular-nums text-white">
+          <div className="ml-auto inline-flex items-center gap-2.5 rounded-full bg-black/15 px-3 py-1.5 text-[13px] font-bold tabular-nums text-white">
             <span className="inline-flex items-center gap-1.5" title="En ligne">
               <span className={cn('h-2 w-2 rounded-full', onlineScreens > 0 ? 'bg-emerald-300 pulse-online' : 'bg-white/50')} />
               {onlineScreens}
             </span>
             {sleepingScreens > 0 && (
-              <span className="inline-flex items-center gap-1.5 text-white/85" title="En veille">
-                <Moon className="h-3.5 w-3.5" />
+              <span className="inline-flex items-center gap-1" title="En veille">
+                <Moon className="h-3.5 w-3.5 text-white/85" />
                 {sleepingScreens}
               </span>
             )}
-            <span className="inline-flex items-center gap-1.5 text-white/75" title="Écrans">
-              <Monitor className="h-4 w-4" />
+            <span className="inline-flex items-center gap-1 text-white/75" title="Écrans">
+              <Monitor className="h-3.5 w-3.5" />
               {totalScreens}
             </span>
-            {fleet.isSuperAdmin && <ShieldCheck className="h-4 w-4 text-white/90" aria-label="Admin" />}
+            {fleet.isSuperAdmin && <ShieldCheck className="h-3.5 w-3.5 text-white/90" aria-label="Admin" />}
           </div>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            aria-label="Se déconnecter"
+            title="Se déconnecter"
+            className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-black/15 text-white transition hover:bg-black/25 active:scale-95"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
 
         <Wave className="pointer-events-none absolute inset-x-0 bottom-0 h-4 w-full translate-y-[99%]" />
       </header>
 
-      <main className="mx-auto w-full max-w-md flex-1 px-4 pb-36 pt-8 md:max-w-4xl xl:max-w-6xl">
+      <main className="mx-auto w-full max-w-md flex-1 px-4 pb-36 pt-7 md:max-w-4xl xl:max-w-6xl">
         <div key={activeTab} className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+          {tab === 'dashboard' && (
+            <Dashboard
+              displayName={displayName}
+              groups={fleet.groups}
+              configurations={fleet.configurations}
+              screens={fleet.screens}
+              isSuperAdmin={fleet.isSuperAdmin}
+              now={now}
+              criticalCount={criticalCount}
+              onOpenWall={id => {
+                setFocusConfigId(id);
+                setActiveTab('accueil');
+              }}
+              onNavigate={t => {
+                setFocusConfigId(null);
+                setActiveTab(t);
+              }}
+            />
+          )}
+
           {tab === 'accueil' && (
             <Broadcast
+              focusConfigId={focusConfigId}
               groups={fleet.groups}
               configurations={fleet.configurations}
               screens={fleet.screens}
@@ -316,7 +332,16 @@ export function Main({ user }: { user: User }) {
         className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center justify-around gap-1 rounded-full border border-line bg-white/90 p-1.5 shadow-lift backdrop-blur-xl"
         aria-label="Navigation principale"
       >
-        <NavButton active={tab === 'accueil'} onClick={() => setActiveTab('accueil')} icon={<Store className="h-5 w-5" />} label="Accueil" />
+        <NavButton active={tab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<House className="h-5 w-5" />} label="Accueil" />
+        <NavButton
+          active={tab === 'accueil'}
+          onClick={() => {
+            setFocusConfigId(null);
+            setActiveTab('accueil');
+          }}
+          icon={<Rocket className="h-5 w-5" />}
+          label="Diffuser"
+        />
         <NavButton active={tab === 'appareils'} onClick={() => setActiveTab('appareils')} icon={<MonitorPlay className="h-5 w-5" />} label="Écrans" />
         <NavButton active={tab === 'bibliotheque'} onClick={() => setActiveTab('bibliotheque')} icon={<Clapperboard className="h-5 w-5" />} label="Vidéos" />
         {fleet.isSuperAdmin && (
@@ -324,7 +349,7 @@ export function Main({ user }: { user: User }) {
             active={tab === 'maintenance'}
             onClick={() => setActiveTab('maintenance')}
             icon={<Stethoscope className="h-5 w-5" />}
-            label="Maintenance"
+            label="Suivi"
             alert={criticalCount > 0}
           />
         )}

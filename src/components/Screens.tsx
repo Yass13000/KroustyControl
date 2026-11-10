@@ -396,7 +396,7 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
                   <img src={thumb} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover opacity-85" />
                 ) : preview ? (
                   <video
-                    src={`${preview}#t=0.5`}
+                    src={`${preview}#t=5`}
                     muted
                     playsInline
                     preload="metadata"

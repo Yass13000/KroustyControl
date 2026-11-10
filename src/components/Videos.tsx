@@ -952,8 +952,8 @@ function VideoThumb({ video, className, dead }: { video: VideoFile; className?: 
 
   if (video.thumbnail && !failed) return <img src={video.thumbnail} alt="" loading="lazy" className={cls} onError={() => setFailed(true)} />;
   if (video.url && !isGoogleDrive(video.url) && !failed) {
-    // #t= affiche une image de la vidéo ; preload="metadata" évite de télécharger tout le fichier.
-    return <video src={`${video.url}#t=0.5`} muted playsInline preload="metadata" className={cn(cls, 'pointer-events-none')} onError={() => setFailed(true)} />;
+    // #t=5 : image prise après les fondus d’ouverture (souvent noirs) ; preload="metadata" évite de télécharger tout le fichier.
+    return <video src={`${video.url}#t=5`} muted playsInline preload="metadata" className={cn(cls, 'pointer-events-none')} onError={() => setFailed(true)} />;
   }
   return (
     <span className="flex h-full w-full flex-col items-center justify-center gap-1 bg-gradient-to-br from-brand-100 to-cream text-brand">
