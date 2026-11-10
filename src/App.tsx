@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
-import { AlertCircle, Clapperboard, Stethoscope, Eye, EyeOff, Lock, LogOut, Mail, Monitor, MonitorPlay, RotateCcw, ShieldCheck, Store, X } from 'lucide-react';
+import { AlertCircle, Clapperboard, Moon, Stethoscope, Eye, EyeOff, Lock, LogOut, Mail, Monitor, MonitorPlay, RotateCcw, ShieldCheck, Store, X } from 'lucide-react';
 import { sbAuth } from './lib/supabase';
 import { useFleetData, useNow } from './lib/data';
 import { isOnline } from './lib/media';
@@ -197,7 +197,8 @@ export function Main({ user }: { user: User }) {
     : 0;
   // Un compte non admin ne doit jamais rester sur l'onglet Maintenance.
   const tab: Tab = activeTab === 'maintenance' && !fleet.isSuperAdmin ? 'appareils' : activeTab;
-  const onlineScreens = fleet.screens.filter(s => isOnline(s.last_ping, now)).length;
+  const onlineScreens = fleet.screens.filter(s => isOnline(s.last_ping, now) && s.power_state !== 'sleep').length;
+  const sleepingScreens = fleet.screens.filter(s => isOnline(s.last_ping, now) && s.power_state === 'sleep').length;
 
   const handleLogout = async () => {
     const ok = await confirm({ title: 'Se déconnecter ?', confirmLabel: 'Déconnexion' });
@@ -245,6 +246,12 @@ export function Main({ user }: { user: User }) {
               <span className={cn('h-2 w-2 rounded-full', onlineScreens > 0 ? 'bg-emerald-300 pulse-online' : 'bg-white/50')} />
               {onlineScreens}
             </span>
+            {sleepingScreens > 0 && (
+              <span className="inline-flex items-center gap-1.5 text-white/85" title="En veille">
+                <Moon className="h-3.5 w-3.5" />
+                {sleepingScreens}
+              </span>
+            )}
             <span className="inline-flex items-center gap-1.5 text-white/75" title="Écrans">
               <Monitor className="h-4 w-4" />
               {totalScreens}
@@ -285,7 +292,7 @@ export function Main({ user }: { user: User }) {
             />
           )}
 
-          {tab === 'bibliotheque' && <Videos isSuperAdmin={fleet.isSuperAdmin} onPlayVideo={setPlayingVideoSrc} screens={fleet.screens} />}
+          {tab === 'bibliotheque' && <Videos isSuperAdmin={fleet.isSuperAdmin} onPlayVideo={setPlayingVideoSrc} screens={fleet.screens} configurations={fleet.configurations} />}
 
           {tab === 'maintenance' && (
             <Maintenance groups={fleet.groups} configurations={fleet.configurations} screens={fleet.screens} onChanged={fleet.refresh} />

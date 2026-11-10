@@ -30,9 +30,12 @@ export interface AppScreen {
   player_version?: string | null;
   device_model?: string | null;
   booted_at?: string | null;
+  // Veille hors horaires (lecteur 1.2+, migration 20261110_sleep.sql)
+  power_state?: string | null;
+  power_state_at?: string | null;
 }
 
-export type ScreenEventKind = 'outage' | 'boot' | 'error' | 'command' | 'content' | 'assign';
+export type ScreenEventKind = 'outage' | 'boot' | 'error' | 'command' | 'content' | 'assign' | 'power';
 
 export interface ScreenEvent {
   id: number;

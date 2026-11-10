@@ -411,7 +411,7 @@ export default function Broadcast({
             >
               {s ? (
                 <span className="flex max-w-full items-center gap-1.5 text-sm font-extrabold text-brand-800">
-                  <StatusDot online={isOnline(s.last_ping)} className="h-2 w-2" />
+                  <StatusDot online={isOnline(s.last_ping)} sleeping={s.power_state === 'sleep'} className="h-2 w-2" />
                   <span className="truncate">{s.id}</span>
                 </span>
               ) : (

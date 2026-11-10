@@ -1,5 +1,5 @@
 import { useMemo, useState, type ChangeEvent } from 'react';
-import { Camera, ChevronLeft, ChevronRight, Film, Hourglass, ImagePlus, LayoutGrid, Monitor, MonitorPlay, Plus, Search, Store, Trash2, Unplug, UserRound } from 'lucide-react';
+import { Camera, Check, ChevronLeft, Pencil, ChevronRight, Film, Hourglass, ImagePlus, LayoutGrid, Monitor, MonitorPlay, Plus, Search, Store, Trash2, Unplug, UserRound } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
 import { errorMessage, must, useAccounts, useLibrary } from '../lib/data';
 import { FORMATS, fileNameFromUrl, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from '../lib/media';
@@ -46,6 +46,7 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null);
   const [newConfigName, setNewConfigName] = useState('');
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [newConfigFormat, setNewConfigFormat] = useState('1x1');
   const [assignTarget, setAssignTarget] = useState<{ configId: string; format: string; x: number; y: number; displayNum: number } | null>(null);
 
@@ -122,6 +123,14 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
       setNewGroupImageUrl('');
       setShowCreateForm(false);
     }
+  };
+
+  const saveGroupName = async () => {
+    const name = (renaming || '').trim();
+    const group = selectedGroup;
+    setRenaming(null);
+    if (!group || !name || name === group.name) return;
+    await run(async () => must(await sbClient.from('groups').update({ name }).eq('id', group.id)), 'Restaurant renommé');
   };
 
   const createNewConfiguration = async () => {
@@ -287,7 +296,7 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
               <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-black/60" />
               <div className="relative z-10 flex h-full flex-col justify-between p-2.5">
                 <div className="flex items-start justify-between">
-                  <StatusDot online={online(s)} className="mt-1" />
+                  <StatusDot online={online(s)} sleeping={s.power_state === 'sleep'} className="mt-1" />
                   {isSuperAdmin && (
                     <IconButton label={`Retirer ${s.id}`} variant="onDark" size="sm" onClick={() => resetScreen(s.id)}>
                       <Unplug className="h-4 w-4" />
@@ -400,7 +409,7 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
                 )}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/40" />
                 <p className="absolute inset-x-3 bottom-2 flex items-center gap-2 text-base font-extrabold text-white drop-shadow">
-                  <StatusDot online={on} />
+                  <StatusDot online={on} sleeping={s.power_state === 'sleep'} />
                   <span className="truncate">{s.id}</span>
                 </p>
               </div>
@@ -550,7 +559,7 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {unassignedScreens.map(s => (
                 <div key={s.id} className="flex items-center gap-3 rounded-2xl border border-sand bg-cream/60 p-3">
-                  <StatusDot online={online(s)} />
+                  <StatusDot online={online(s)} sleeping={s.power_state === 'sleep'} />
                   <span className="min-w-0 flex-1 truncate text-sm font-bold text-ink">{s.id}</span>
                   <IconButton label={`Supprimer ${s.id}`} variant="danger" size="sm" onClick={() => deleteScreen(s.id)}>
                     <Trash2 className="h-4 w-4" />
@@ -609,9 +618,48 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
         onClose={() => {
           setSelectedGroupId(null);
           setSelectedConfigId(null);
+          setRenaming(null);
         }}
         size="lg"
-        title={selectedConfig ? selectedConfig.name : selectedGroup?.name}
+        title={
+          selectedConfig ? (
+            selectedConfig.name
+          ) : renaming !== null ? (
+            <form
+              className="flex items-center gap-2"
+              onSubmit={e => {
+                e.preventDefault();
+                saveGroupName();
+              }}
+            >
+              <Input
+                autoFocus
+                value={renaming}
+                onChange={e => setRenaming(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    setRenaming(null);
+                  }
+                }}
+                aria-label="Nom du restaurant"
+                className="h-10 text-base font-bold"
+              />
+              <IconButton type="submit" label="Enregistrer le nom" variant="secondary" disabled={!renaming.trim()}>
+                <Check className="h-5 w-5 text-brand" />
+              </IconButton>
+            </form>
+          ) : (
+            selectedGroup?.name
+          )
+        }
+        headerActions={
+          isSuperAdmin && selectedGroup && !selectedConfig && renaming === null ? (
+            <IconButton label="Renommer" onClick={() => setRenaming(selectedGroup.name)}>
+              <Pencil className="h-4.5 w-4.5" />
+            </IconButton>
+          ) : undefined
+        }
         subtitle={selectedConfig ? selectedGroup?.name : undefined}
         leading={
           selectedConfig ? (
@@ -765,7 +813,7 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
                 onClick={() => submitAssign(s.id)}
                 className="flex w-full items-center gap-3 rounded-2xl border border-line bg-white p-3.5 text-left transition hover:border-brand/40 hover:bg-brand-50/40 active:scale-[0.99]"
               >
-                <StatusDot online={online(s)} />
+                <StatusDot online={online(s)} sleeping={s.power_state === 'sleep'} />
                 <span className="min-w-0 flex-1 truncate text-sm font-bold text-ink">{s.id}</span>
                 <Plus className="h-5 w-5 text-brand" aria-hidden />
               </button>

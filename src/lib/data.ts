@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { sbClient } from './supabase';
+import { analyzeVideo, readCache, writeCache, type VideoAnalysis } from './videoAnalysis';
 import type { Album, AppScreen, Configuration, Group, Profile, ScreenCommand, ScreenEvent, VideoFile } from './types';
 
 /** Supabase ne lève pas d'exception : on transforme `{ error }` en erreur. */
@@ -262,6 +263,49 @@ export async function sendScreenCommand(screenIds: string[], command: ScreenComm
       sbClient.from('screens_config').update({ command, command_id: crypto.randomUUID(), command_at: at }).eq('id', id),
     ),
   );
+}
+
+/**
+ * Analyse qualité des vidéos (en-tête MP4 uniquement), 2 à la fois, avec cache local :
+ * une vidéo déjà analysée ne génère plus aucune requête.
+ */
+export function useVideoAnalyses(urls: string[]) {
+  const [results, setResults] = useState<Record<string, VideoAnalysis>>(() => readCache());
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const queued = useRef(new Set<string>());
+  const key = urls.join('|');
+
+  const run = useCallback(async (list: string[], force = false) => {
+    const todo = list.filter(u => u && (force || (!readCache()[u] && !queued.current.has(u))));
+    if (todo.length === 0) return;
+    todo.forEach(u => queued.current.add(u));
+    setPending(prev => new Set([...prev, ...todo]));
+    const queue = [...todo];
+    const worker = async () => {
+      while (queue.length) {
+        const url = queue.shift()!;
+        const result = await analyzeVideo(url);
+        const cache = readCache();
+        if (result.ok) cache[url] = result;
+        else delete cache[url]; // un échec sera retenté au prochain passage
+        writeCache(cache);
+        setResults(prev => ({ ...prev, [url]: result }));
+        setPending(prev => {
+          const next = new Set(prev);
+          next.delete(url);
+          return next;
+        });
+        queued.current.delete(url);
+      }
+    };
+    await Promise.all([worker(), worker()]);
+  }, []);
+
+  useEffect(() => {
+    run(key ? key.split('|') : []);
+  }, [key, run]);
+
+  return { results, pending, reanalyze: (url: string) => run([url], true) };
 }
 
 /** Médiathèque (dossiers + vidéos). */

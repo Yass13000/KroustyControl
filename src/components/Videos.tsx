@@ -1,9 +1,21 @@
-import { useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Copy, Film, FolderOpen, FolderPlus, Link2, MonitorPlay, Play, Plus, Search, Trash2, Video } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCopy, Copy, Film, FolderOpen, FolderPlus, Gauge, Link2, Loader2, MonitorPlay, Play, Plus, RefreshCw, Search, Trash2, Video, XCircle } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
-import { errorMessage, must, useLibrary } from '../lib/data';
+import { errorMessage, must, useLibrary, useVideoAnalyses } from '../lib/data';
 import { fileExtension, googleDriveThumbnail, isGoogleDrive, parsePlaylist, transformStorageUrl } from '../lib/media';
-import type { Album, AppScreen, VideoFile } from '../lib/types';
+import type { Album, AppScreen, Configuration, VideoFile } from '../lib/types';
+import {
+  DEFAULT_TARGET,
+  analyzeVideo,
+  assess,
+  mbps,
+  megabytes,
+  recommendation,
+  targetsByUrl,
+  type Assessment,
+  type VideoAnalysis,
+} from '../lib/videoAnalysis';
+import { formatDuration } from '../lib/diagnostics';
 import { Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Spinner, cn, useFeedback } from './ui';
 
 interface VideosProps {
@@ -11,6 +23,8 @@ interface VideosProps {
   onPlayVideo: (fileUrl: string) => void;
   /** Écrans visibles par le compte : sert à indiquer où chaque vidéo est diffusée. */
   screens?: AppScreen[];
+  /** Configurations : servent à connaître la taille des murs qui diffusent chaque vidéo. */
+  configurations?: Configuration[];
 }
 
 /** Tente de capturer une image de la vidéo (échoue silencieusement si le CORS l'interdit). */
@@ -51,12 +65,26 @@ const generateThumbnail = (url: string): Promise<string> =>
     video.src = url;
   });
 
-export default function Videos({ isSuperAdmin, onPlayVideo, screens = [] }: VideosProps) {
+export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], configurations = [] }: VideosProps) {
   const { toast, confirm } = useFeedback();
   const { albums, videos, loading, refresh } = useLibrary();
 
   const [albumSearchQuery, setAlbumSearchQuery] = useState('');
-  const [libView, setLibView] = useState<'albums' | 'all'>('albums');
+  const [libView, setLibView] = useState<'albums' | 'all' | 'check'>('albums');
+  const [inspectId, setInspectId] = useState<string | null>(null);
+
+  // Contrôle qualité : analyse légère de l'en-tête de chaque vidéo (mise en cache).
+  const analyses = useVideoAnalyses(useMemo(() => videos.map(v => v.url), [videos]));
+  const targets = useMemo(() => targetsByUrl(screens, configurations), [screens, configurations]);
+  const assessmentOf = (url: string): Assessment | undefined => {
+    const a = analyses.results[url];
+    return a ? assess(a, targets.get(url) || DEFAULT_TARGET) : undefined;
+  };
+  const qualityOf = (url: string) => (analyses.pending.has(url) ? 'pending' : assessmentOf(url)?.verdict);
+  const toOptimize = videos.filter(v => {
+    const q = qualityOf(v.url);
+    return q === 'heavy' || q === 'incompatible' || q === 'unknown';
+  });
 
   /** url → écrans qui diffusent cette vidéo. */
   const usage = useMemo(() => {
@@ -201,6 +229,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [] }: Vide
           options={[
             { value: 'albums', label: 'Dossiers' },
             { value: 'all', label: 'Toutes' },
+            { value: 'check', label: toOptimize.length ? `À optimiser · ${toOptimize.length}` : 'À optimiser' },
           ]}
         />
       </div>
@@ -213,7 +242,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [] }: Vide
         aria-label="Rechercher"
       />
 
-      {libView === 'all' ? (
+      {libView === 'all' || libView === 'check' ? (
         loading ? (
           <div className="flex justify-center py-16">
             <Spinner />
@@ -221,9 +250,14 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [] }: Vide
         ) : (
           (() => {
             const q = albumSearchQuery.trim().toLowerCase();
-            const list = videos.filter(v => !q || v.name.toLowerCase().includes(q) || (albumName(v.album_id) || '').toLowerCase().includes(q));
+            const base = libView === 'check' ? toOptimize : videos;
+            const list = base.filter(v => !q || v.name.toLowerCase().includes(q) || (albumName(v.album_id) || '').toLowerCase().includes(q));
             if (list.length === 0) {
-              return <EmptyState icon={<Film className="h-6 w-6" />} title={q ? 'Aucun résultat' : 'Aucune vidéo'} />;
+              return libView === 'check' && !q ? (
+                <EmptyState icon={<CheckCircle2 className="h-6 w-6" />} title="Toutes les vidéos sont légères" />
+              ) : (
+                <EmptyState icon={<Film className="h-6 w-6" />} title={q ? 'Aucun résultat' : 'Aucune vidéo'} />
+              );
             }
             return (
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
@@ -233,6 +267,8 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [] }: Vide
                     video={v}
                     albumLabel={albumName(v.album_id) || 'Sans dossier'}
                     usedOn={usage.get(v.url) || []}
+                    quality={qualityOf(v.url)}
+                    onInspect={() => setInspectId(v.id)}
                     canDelete={isSuperAdmin}
                     onPlay={() => onPlayVideo(v.url)}
                     onCopy={() => copyVideoLink(v.url)}
@@ -311,6 +347,8 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [] }: Vide
                     key={v.id}
                     video={v}
                     usedOn={usage.get(v.url) || []}
+                    quality={qualityOf(v.url)}
+                    onInspect={() => setInspectId(v.id)}
                     canDelete={isSuperAdmin}
                     onPlay={() => onPlayVideo(v.url)}
                     onCopy={() => copyVideoLink(v.url)}
@@ -322,6 +360,50 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [] }: Vide
           </div>
         </div>
       )}
+
+      {/* ======================= CONTRÔLE QUALITÉ ======================= */}
+      {(() => {
+        const v = videos.find(x => x.id === inspectId);
+        const a = v ? analyses.results[v.url] : undefined;
+        const target = v ? targets.get(v.url) || DEFAULT_TARGET : DEFAULT_TARGET;
+        return (
+          <Modal
+            open={!!v}
+            onClose={() => setInspectId(null)}
+            title={v?.name}
+            subtitle={v ? albumName(v.album_id) : undefined}
+            z="z-[60]"
+            footer={
+              v && (
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="sm" icon={<RefreshCw className="h-4 w-4" />} loading={analyses.pending.has(v.url)} onClick={() => analyses.reanalyze(v.url)}>
+                    Réanalyser
+                  </Button>
+                  {a?.ok && (
+                    <Button
+                      size="sm"
+                      className="ml-auto"
+                      icon={<ClipboardCopy className="h-4 w-4" />}
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(recommendation(a, target).ffmpeg);
+                          toast('Commande ffmpeg copiée');
+                        } catch {
+                          toast('Copie impossible', 'error');
+                        }
+                      }}
+                    >
+                      Commande ffmpeg
+                    </Button>
+                  )}
+                </div>
+              )
+            }
+          >
+            {v && <QualitySheet analysis={a} pending={analyses.pending.has(v.url)} target={target} walls={targets.get(v.url)?.walls || []} />}
+          </Modal>
+        );
+      })()}
 
       {/* ======================= MODALES ======================= */}
       <Modal
@@ -400,6 +482,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [] }: Vide
               leading={<Link2 className="h-4.5 w-4.5" />}
             />
           </div>
+          <DraftQuality url={newVideoUrl} />
           <button type="submit" className="sr-only">
             Ajouter
           </button>
@@ -415,6 +498,8 @@ function VideoCard({
   video,
   albumLabel,
   usedOn,
+  quality,
+  onInspect,
   canDelete,
   onPlay,
   onCopy,
@@ -423,6 +508,8 @@ function VideoCard({
   video: VideoFile;
   albumLabel?: string;
   usedOn: string[];
+  quality?: Assessment['verdict'] | 'pending';
+  onInspect: () => void;
   canDelete: boolean;
   onPlay: () => void;
   onCopy: () => void;
@@ -451,6 +538,27 @@ function VideoCard({
             {usedOn.length}
           </span>
         )}
+        <button
+          type="button"
+          onClick={onInspect}
+          aria-label="Contrôle qualité"
+          title="Contrôle qualité"
+          className={cn(
+            'absolute bottom-1.5 left-1.5 inline-flex h-7 items-center gap-1 rounded-full px-2 text-[11px] font-bold backdrop-blur transition hover:brightness-110',
+            quality === 'light' && 'bg-black/45 text-emerald-300',
+            quality === 'heavy' && 'bg-amber-500/95 text-white',
+            (quality === 'incompatible' || quality === 'unknown') && 'bg-red-600/95 text-white',
+            (!quality || quality === 'pending') && 'bg-black/45 text-white/80',
+          )}
+        >
+          {quality === 'light' && <CheckCircle2 className="h-4 w-4" />}
+          {quality === 'heavy' && <AlertTriangle className="h-4 w-4" />}
+          {(quality === 'incompatible' || quality === 'unknown') && <XCircle className="h-4 w-4" />}
+          {(!quality || quality === 'pending') && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {quality === 'heavy' && 'À optimiser'}
+          {quality === 'incompatible' && 'Incompatible'}
+          {quality === 'unknown' && 'Illisible'}
+        </button>
         <div className="absolute right-1.5 top-1.5 flex gap-1">
           <IconButton label="Copier le lien" size="sm" variant="onDark" onClick={onCopy}>
             <Copy className="h-3.5 w-3.5" />
@@ -505,5 +613,146 @@ function AlbumCover({ videos }: { videos: VideoFile[] }) {
         )}
       </span>
     </span>
+  );
+}
+
+const VERDICT_UI = {
+  light: { tone: 'bg-emerald-50 text-emerald-700', icon: <CheckCircle2 className="h-5 w-5" />, label: 'Légère pour les écrans' },
+  heavy: { tone: 'bg-amber-50 text-amber-700', icon: <AlertTriangle className="h-5 w-5" />, label: 'À optimiser' },
+  incompatible: { tone: 'bg-red-50 text-red-700', icon: <XCircle className="h-5 w-5" />, label: 'Incompatible' },
+  unknown: { tone: 'bg-red-50 text-red-700', icon: <XCircle className="h-5 w-5" />, label: 'Illisible' },
+} as const;
+
+function QualitySheet({
+  analysis: a,
+  pending,
+  target,
+  walls,
+}: {
+  analysis?: VideoAnalysis;
+  pending: boolean;
+  target: { width: number; height: number };
+  walls: string[];
+}) {
+  if (!a || pending) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-10 text-sm text-muted">
+        <Loader2 className="h-6 w-6 animate-spin text-brand" />
+        Analyse de l’en-tête…
+      </div>
+    );
+  }
+  const s = assess(a, target);
+  const ui = VERDICT_UI[s.verdict];
+  const reco = a.ok ? recommendation(a, target) : null;
+  const rows: [string, string][] = a.ok
+    ? [
+        ['Résolution', a.width && a.height ? `${a.width}×${a.height}` : '—'],
+        ['Images/s', a.fps ? `${Math.round(a.fps * 10) / 10}` : '—'],
+        ['Codec', `${(a.codec || '—').toUpperCase()}${a.profile ? ` · ${a.profile}` : ''}`],
+        ['Débit', a.bitrate ? mbps(a.bitrate) : '—'],
+        ['Durée', a.duration ? formatDuration(a.duration) : '—'],
+        ['Taille', a.size ? megabytes(a.size) : '—'],
+        ['Son', a.hasAudio ? 'Oui' : 'Non'],
+        ['Utile', `${target.width}×${target.height}`],
+      ]
+    : [];
+
+  return (
+    <div className="space-y-4">
+      <div className={cn('flex items-start gap-3 rounded-2xl p-3.5', ui.tone)}>
+        {ui.icon}
+        <div className="min-w-0">
+          <p className="font-bold">{ui.label}</p>
+          {s.reasons.map(r => (
+            <p key={r} className="text-sm opacity-90">
+              {r}
+            </p>
+          ))}
+        </div>
+      </div>
+
+      {rows.length > 0 && (
+        <dl className="grid grid-cols-2 gap-2">
+          {rows.map(([k, v]) => (
+            <div key={k} className="rounded-2xl bg-cream/70 px-3.5 py-2.5">
+              <dt className="text-xs font-semibold text-muted">{k}</dt>
+              <dd className="truncate text-[15px] font-bold tabular-nums text-ink">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {walls.length > 0 && (
+        <p className="flex items-start gap-2 px-1 text-sm text-muted">
+          <MonitorPlay className="mt-0.5 h-4 w-4 flex-shrink-0 text-brand" />
+          {walls.join(', ')}
+        </p>
+      )}
+
+      {reco && s.verdict !== 'light' && (
+        <div className="rounded-2xl border border-line p-3.5">
+          <p className="flex items-center gap-2 text-sm font-bold text-ink">
+            <Gauge className="h-4 w-4 text-brand" /> Export conseillé
+          </p>
+          <p className="mt-1 text-sm text-muted">{reco.summary}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Analyse du lien pendant la saisie, avant même d'ajouter la vidéo. */
+function DraftQuality({ url }: { url: string }) {
+  const [state, setState] = useState<{ url: string; analysis?: VideoAnalysis } | null>(null);
+
+  useEffect(() => {
+    const clean = url.trim();
+    if (!/^https?:\/\//.test(clean)) {
+      setState(null);
+      return;
+    }
+    const direct = transformStorageUrl(clean);
+    setState({ url: direct });
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const analysis = await analyzeVideo(direct);
+      if (!cancelled) setState({ url: direct, analysis });
+    }, 700);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [url]);
+
+  if (!state) return null;
+  if (!state.analysis) {
+    return (
+      <p className="flex items-center gap-2 px-1 text-sm text-muted">
+        <Loader2 className="h-4 w-4 animate-spin" /> Contrôle de la vidéo…
+      </p>
+    );
+  }
+  const s = assess(state.analysis, DEFAULT_TARGET);
+  const ui = VERDICT_UI[s.verdict];
+  const a = state.analysis;
+  return (
+    <div className={cn('rounded-2xl p-3 text-sm', ui.tone)}>
+      <p className="flex items-center gap-2 font-bold">
+        {ui.icon}
+        {ui.label}
+      </p>
+      {a.ok && (
+        <p className="mt-0.5 opacity-90">
+          {a.width}×{a.height} · {a.fps ? `${Math.round(a.fps)} i/s` : '? i/s'} · {(a.codec || '').toUpperCase()}
+          {a.bitrate ? ` · ${mbps(a.bitrate)}` : ''}
+        </p>
+      )}
+      {s.reasons.map(r => (
+        <p key={r} className="opacity-90">
+          {r}
+        </p>
+      ))}
+    </div>
   );
 }

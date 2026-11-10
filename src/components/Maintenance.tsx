@@ -18,7 +18,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
-import { errorMessage, must, sendScreenCommand, useAccounts, useLibrary, useNow, useScreenEvents } from '../lib/data';
+import { errorMessage, must, sendScreenCommand, useAccounts, useLibrary, useNow, useScreenEvents, useVideoAnalyses } from '../lib/data';
 import { FORMATS, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from '../lib/media';
 import {
   SEVERITY_ORDER,
@@ -63,6 +63,8 @@ export default function Maintenance({ groups, configurations, screens, onChanged
   const { toast, confirm } = useFeedback();
   const library = useLibrary();
   const journal = useScreenEvents();
+  const playlistUrls = useMemo(() => Array.from(new Set(screens.flatMap(s => parsePlaylist(s.video_url)))), [screens]);
+  const analyses = useVideoAnalyses(playlistUrls);
   const [journalFilter, setJournalFilter] = useState<'all' | 'outage' | 'error' | 'command' | 'content'>('all');
   const accounts = useAccounts(true);
   const now = useNow(5000);
@@ -117,8 +119,8 @@ export default function Maintenance({ groups, configurations, screens, onChanged
   /* ------------------------------ Diagnostic ------------------------------ */
 
   const issues = useMemo(
-    () => diagnose({ screens, configurations, groups, videos: library.videos, media, now, events: journal.events }),
-    [screens, configurations, groups, library.videos, media, now, journal.events],
+    () => diagnose({ screens, configurations, groups, videos: library.videos, media, now, events: journal.events, analyses: analyses.results }),
+    [screens, configurations, groups, library.videos, media, now, journal.events, analyses.results],
   );
   const counts = {
     critical: issues.filter(i => i.severity === 'critical').length,
@@ -168,7 +170,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
     })?.value;
   };
 
-  const fixesFor = (issue: Issue): { label: string; run: () => Promise<unknown>; danger?: boolean }[] => {
+  const fixesFor = (issue: Issue): { label: string; run: () => Promise<unknown>; danger?: boolean; message?: string }[] => {
     const s = screens.find(x => x.id === issue.screenId);
     const config = issue.configId ? configById.get(issue.configId) : undefined;
     const update = (patch: Record<string, unknown>) => async () => must(await sbClient.from('screens_config').update(patch).eq('id', issue.screenId!));
@@ -198,6 +200,25 @@ export default function Maintenance({ groups, configurations, screens, onChanged
         return config ? [{ label: 'Réaligner', run: update({ group_id: config.group_id }) }] : [];
       case 'audio_on_slave':
         return [{ label: 'Couper', run: update({ audio_url: '' }) }];
+      case 'schedule_mismatch': {
+        const g = issue.groupId ? groupById.get(issue.groupId) : undefined;
+        if (!g) return [];
+        const configIds = configurations.filter(c => c.group_id === g.id).map(c => c.id);
+        return [
+          {
+            label: `Appliquer ${hhmm(g.open_time)}–${hhmm(g.close_time)}`,
+            danger: true,
+            message: 'Avec le lecteur 1.2, les écrans s’éteindront en dehors de ces horaires.',
+            run: async () =>
+              must(
+                await sbClient
+                  .from('screens_config')
+                  .update({ opening_time: hhmm(g.open_time), closing_time: hhmm(g.close_time) })
+                  .in('configuration_id', configIds),
+              ),
+          },
+        ];
+      }
       case 'player_error':
         return s ? [{ label: 'Effacer', run: update({ last_error: '', last_error_at: null }) }] : [];
       default:
@@ -205,9 +226,9 @@ export default function Maintenance({ groups, configurations, screens, onChanged
     }
   };
 
-  const runFix = async (key: string, fix: { label: string; run: () => Promise<unknown>; danger?: boolean }, title: string) => {
+  const runFix = async (key: string, fix: { label: string; run: () => Promise<unknown>; danger?: boolean; message?: string }, title: string) => {
     if (fix.danger) {
-      const ok = await confirm({ title: `${fix.label} ?`, message: title, confirmLabel: fix.label, danger: true });
+      const ok = await confirm({ title: `${fix.label} ?`, message: fix.message || title, confirmLabel: fix.label, danger: true });
       if (!ok) return;
     }
     setFixing(key);
@@ -413,7 +434,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
             return (
               <li key={s.id}>
                 <button type="button" onClick={() => setOpenScreenId(s.id)} className="flex w-full items-center gap-3 p-3.5 text-left transition hover:bg-cream/70">
-                  <StatusDot online={isOnline(s.last_ping, now)} />
+                  <StatusDot online={isOnline(s.last_ping, now)} sleeping={s.power_state === 'sleep'} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[15px] font-bold text-ink">{s.id}</span>
                     <span className="block truncate text-xs text-muted">{group ? `${group.name} · ${config?.name}` : 'En attente'}</span>
@@ -484,7 +505,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
         size="lg"
         title={openScreen?.id}
         subtitle={openScreen ? (placeOf(openScreen).group ? `${placeOf(openScreen).group!.name} · ${placeOf(openScreen).config?.name}` : 'En attente') : undefined}
-        leading={openScreen ? <StatusDot online={isOnline(openScreen.last_ping, now)} className="ml-1" /> : undefined}
+        leading={openScreen ? <StatusDot online={isOnline(openScreen.last_ping, now)} sleeping={openScreen.power_state === 'sleep'} className="ml-1" /> : undefined}
         footer={
           openScreen && (
             <div className="flex flex-wrap gap-2">
@@ -552,7 +573,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
         )}
 
         <dl className="divide-y divide-sand rounded-2xl border border-sand">
-          <Row label="État" value={on ? 'En ligne' : 'Hors ligne'} />
+          <Row label="État" value={!on ? 'Hors ligne' : s.power_state === 'sleep' ? 'En veille' : 'En ligne'} />
           <Row label="Dernier signal" value={s.last_ping ? `${timeAgo(s.last_ping, now)} · ${new Date(s.last_ping).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'medium' })}` : 'jamais'} />
           {config && <Row label="Position" value={`${s.pos_x + 1},${s.pos_y + 1} sur ${config.format}`} />}
           {group && <Row label="Horaires" value={`${hhmm(group.open_time)} – ${hhmm(group.close_time)} · ${isOpenAt(group) ? 'ouvert' : 'fermé'}`} />}
@@ -684,6 +705,7 @@ const EVENT_UI: Record<ScreenEvent['kind'], { dot: string; label: string }> = {
   command: { dot: 'bg-violet-500', label: 'Commande' },
   content: { dot: 'bg-brand', label: 'Contenu' },
   assign: { dot: 'bg-muted', label: 'Assignation' },
+  power: { dot: 'bg-indigo-400', label: 'Veille' },
 };
 
 function EventList({ events, onOpen, compact }: { events: ScreenEvent[]; onOpen?: (id: string) => void; compact?: boolean }) {

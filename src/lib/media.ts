@@ -21,6 +21,10 @@ export const timeAgo = (iso: string | null | undefined, now = Date.now()) => {
   return `il y a ${Math.round(h / 24)} j`;
 };
 
+/** Écran connecté mais en veille hors horaires (lecteur 1.2+). */
+export const isSleeping = (s: { last_ping: string | null; power_state?: string | null }, now = Date.now()) =>
+  s.power_state === 'sleep' && isOnline(s.last_ping, now);
+
 export const FORMATS = [
   { value: '1x1', label: '1 écran seul' },
   { value: '1x2', label: '2 écrans alignés' },

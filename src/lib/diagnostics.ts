@@ -1,6 +1,7 @@
 // Moteur de diagnostic du parc : analyse les données et liste les problèmes, classés par gravité.
 import { ONLINE_THRESHOLD_MS, isGoogleDrive, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from './media';
 import type { AppScreen, Configuration, Group, ScreenEvent, VideoFile } from './types';
+import { assess, wallTarget, type VideoAnalysis } from './videoAnalysis';
 
 export type Severity = 'critical' | 'warning' | 'info';
 
@@ -23,7 +24,11 @@ export type IssueKind =
   | 'stale_device'
   | 'empty_restaurant'
   | 'unstable'
-  | 'command_pending';
+  | 'command_pending'
+  | 'heavy_media'
+  | 'schedule_mismatch'
+  | 'sleep_while_open'
+  | 'awake_while_closed';
 
 export interface Issue {
   id: string;
@@ -74,9 +79,11 @@ interface Input {
   media: Record<string, MediaStatus>;
   now: number;
   events?: ScreenEvent[];
+  /** Analyses qualité des vidéos (en-tête MP4), indexées par URL */
+  analyses?: Record<string, VideoAnalysis>;
 }
 
-export function diagnose({ screens, configurations, groups, videos, media, now, events = [] }: Input): Issue[] {
+export function diagnose({ screens, configurations, groups, videos, media, now, events = [], analyses = {} }: Input): Issue[] {
   const issues: Issue[] = [];
   const configById = new Map(configurations.map(c => [c.id, c]));
   const groupById = new Map(groups.map(g => [g.id, g]));
@@ -192,6 +199,16 @@ export function diagnose({ screens, configurations, groups, videos, media, now, 
       add({ kind: 'audio_on_slave', severity: 'info', screenId: s.id, title: 'Musique sur un écran secondaire', detail: 'Seul l’écran principal doit jouer le son', fixable: true });
     }
 
+    // --- Veille (lecteur 1.2+ : power_state renseigné) ---
+    if (online && s.power_state) {
+      const open = isOpenAt(group, date);
+      if (s.power_state === 'sleep' && open) {
+        add({ kind: 'sleep_while_open', severity: 'critical', screenId: s.id, title: 'En veille pendant l’ouverture', detail: `${where} · vérifier les horaires de l’écran` });
+      } else if (s.power_state === 'on' && !open && hhmm(s.opening_time) === hhmm(group?.open_time) && hhmm(s.closing_time) === hhmm(group?.close_time)) {
+        add({ kind: 'awake_while_closed', severity: 'info', screenId: s.id, title: 'Allumé hors horaires', detail: `${where} · mise en veille au prochain contrôle` });
+      }
+    }
+
     // --- Lecteur ---
     if (s.last_error && s.last_error.trim()) {
       add({
@@ -246,6 +263,50 @@ export function diagnose({ screens, configurations, groups, videos, media, now, 
         groupId: c.group_id,
         title: `Mur incomplet · ${missing} case${missing > 1 ? 's' : ''} vide${missing > 1 ? 's' : ''}`,
         detail: `${g?.name || ''} · ${c.name} (${c.format})`,
+      });
+    }
+  }
+
+  // --- Horaires : le lecteur (1.2+) applique ceux de l'écran ; ils doivent suivre ceux du restaurant ---
+  for (const g of groups) {
+    if (!g.open_time || !g.close_time) continue;
+    const configIds = new Set(configurations.filter(c => c.group_id === g.id).map(c => c.id));
+    const off = screens.filter(
+      s => s.configuration_id && configIds.has(s.configuration_id) && (hhmm(s.opening_time) !== hhmm(g.open_time) || hhmm(s.closing_time) !== hhmm(g.close_time)),
+    );
+    if (off.length === 0) continue;
+    add({
+      kind: 'schedule_mismatch',
+      severity: 'warning',
+      groupId: g.id,
+      title: 'Horaires non appliqués aux écrans',
+      detail: `${g.name} · ${off.length} écran${off.length > 1 ? 's' : ''} en ${hhmm(off[0].opening_time)}–${hhmm(off[0].closing_time)} au lieu de ${hhmm(g.open_time)}–${hhmm(g.close_time)}`,
+      fixable: true,
+    });
+  }
+
+  // --- Vidéos trop lourdes pour le mur qui les diffuse (une alerte par mur et par vidéo) ---
+  for (const c of configurations) {
+    const inConfig = screens.filter(s => s.configuration_id === c.id);
+    if (inConfig.length === 0) continue;
+    const { rows, cols } = parseFormat(c.format);
+    const target = wallTarget(cols, rows);
+    const master = inConfig.find(s => s.pos_x === 0 && s.pos_y === 0) || inConfig[0];
+    const urls = new Set(inConfig.flatMap(s => parsePlaylist(s.video_url)));
+    for (const url of urls) {
+      const a = analyses[url];
+      if (!a?.ok) continue; // un lien illisible est déjà signalé par le test de lecture
+      const verdict = assess(a, target);
+      if (verdict.verdict === 'light') continue;
+      const name = videos.find(v => v.url === url)?.name || shortUrl(url);
+      const g = groupById.get(c.group_id);
+      add({
+        kind: 'heavy_media',
+        severity: verdict.verdict === 'incompatible' ? 'critical' : 'warning',
+        screenId: master.id,
+        configId: c.id,
+        title: verdict.verdict === 'incompatible' ? 'Vidéo incompatible' : 'Vidéo à optimiser',
+        detail: `${name} · ${g?.name || ''} ${c.format} · ${verdict.reasons.join(' · ')}`,
       });
     }
   }

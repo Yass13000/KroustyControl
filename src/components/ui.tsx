@@ -212,11 +212,17 @@ export function Segmented<T extends string>({
   );
 }
 
-export function StatusDot({ online, className }: { online: boolean; className?: string }) {
+export function StatusDot({ online, sleeping, className }: { online: boolean; sleeping?: boolean; className?: string }) {
+  const asleep = online && sleeping;
   return (
     <span
-      className={cn('inline-block h-2.5 w-2.5 flex-shrink-0 rounded-full', online ? 'bg-online pulse-online' : 'bg-muted/35', className)}
-      aria-label={online ? 'En ligne' : 'Hors ligne'}
+      className={cn(
+        'inline-block h-2.5 w-2.5 flex-shrink-0 rounded-full',
+        asleep ? 'bg-indigo-400' : online ? 'bg-online pulse-online' : 'bg-muted/35',
+        className,
+      )}
+      aria-label={asleep ? 'En veille' : online ? 'En ligne' : 'Hors ligne'}
+      title={asleep ? 'En veille' : undefined}
       role="img"
     />
   );
@@ -315,7 +321,8 @@ export function Modal({ open, onClose, title, subtitle, leading, headerActions, 
           <div className="flex items-center gap-3 border-b border-sand px-5 pb-4 pt-3 sm:pt-5">
             {leading}
             <div className="min-w-0 flex-1">
-              {title && <h2 className="truncate text-lg font-extrabold text-ink">{title}</h2>}
+              {title &&
+                (typeof title === 'string' ? <h2 className="truncate text-lg font-extrabold text-ink">{title}</h2> : <div className="text-lg font-extrabold text-ink">{title}</div>)}
               {subtitle && <p className="truncate text-sm text-muted">{subtitle}</p>}
             </div>
             {headerActions}
