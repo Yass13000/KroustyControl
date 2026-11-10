@@ -44,6 +44,9 @@ export interface Assessment {
 
 /* ------------------------------ Lecture par plages ------------------------------ */
 
+/** Lecture d'une plage d'octets : depuis une URL (requête « Range ») ou depuis un fichier local. */
+type RangeReader = (start: number, end: number) => Promise<{ buf: Uint8Array; total?: number; partial: boolean }>;
+
 async function fetchRange(url: string, start: number, end: number) {
   const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
   if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status}`);
@@ -86,9 +89,9 @@ function children(b: Uint8Array, from: number, to: number): Box[] {
 const find = (b: Uint8Array, box: Box | { data: number; end: number }, type: string) => children(b, box.data, box.end).find(c => c.type === type);
 
 /** Trouve et télécharge uniquement la boîte « moov » (métadonnées). */
-async function loadMoov(url: string): Promise<{ moov: Uint8Array; size?: number; head: Uint8Array }> {
+async function loadMoov(read: RangeReader): Promise<{ moov: Uint8Array; size?: number; head: Uint8Array }> {
   const HEAD = 512 * 1024;
-  const first = await fetchRange(url, 0, HEAD - 1);
+  const first = await read(0, HEAD - 1);
   const size = first.total;
   let offset = 0;
   // Parcours des boîtes de premier niveau ; on saute « mdat » sans la lire.
@@ -97,7 +100,7 @@ async function loadMoov(url: string): Promise<{ moov: Uint8Array; size?: number;
     if (offset + 16 <= first.buf.length) header = first.buf.subarray(offset, offset + 16);
     else {
       if (size !== undefined && offset >= size) break;
-      header = (await fetchRange(url, offset, offset + 15)).buf;
+      header = (await read(offset, offset + 15)).buf;
     }
     if (header.length < 8) break;
     let boxSize = u32(header, 0);
@@ -109,7 +112,7 @@ async function loadMoov(url: string): Promise<{ moov: Uint8Array; size?: number;
     if (type === 'moov') {
       if (offset + boxSize <= first.buf.length) return { moov: first.buf.subarray(offset, offset + boxSize), size, head: first.buf };
       if (boxSize > 50 * 1024 * 1024) throw new Error('moov trop grand');
-      return { moov: (await fetchRange(url, offset, offset + boxSize - 1)).buf, size, head: first.buf };
+      return { moov: (await read(offset, offset + boxSize - 1)).buf, size, head: first.buf };
     }
     offset += boxSize;
     if (!first.partial && offset >= first.buf.length) break; // le serveur a tout renvoyé
@@ -261,9 +264,9 @@ function fragmentFps(head: Uint8Array, timescale: number): number | undefined {
  * MP4 fragmenté : durée réelle et images/s lues dans le DERNIER fragment
  * (tfdt = instant de départ du fragment + durées de ses images). Une seule requête en fin de fichier.
  */
-async function tailFragmentInfo(url: string, size: number, timescale: number) {
+async function tailFragmentInfo(read: RangeReader, size: number, timescale: number) {
   const start = Math.max(0, size - 1024 * 1024);
-  const { buf } = await fetchRange(url, start, size - 1);
+  const { buf } = await read(start, size - 1);
   // Cherche le dernier « moof » valide dans la fin du fichier.
   for (let i = buf.length - 8; i >= 4; i--) {
     if (buf[i] !== 0x6d || buf[i + 1] !== 0x6f || buf[i + 2] !== 0x6f || buf[i + 3] !== 0x66) continue; // 'moof'
@@ -311,15 +314,29 @@ const probeDuration = (url: string) =>
     v.src = url;
   });
 
-export async function analyzeVideo(url: string): Promise<VideoAnalysis> {
+export function analyzeVideo(url: string): Promise<VideoAnalysis> {
+  return analyze((a, b) => fetchRange(url, a, b), url);
+}
+
+/** Analyse d'un fichier local, avant envoi : rien ne sort de l'ordinateur. */
+export async function analyzeFile(file: File): Promise<VideoAnalysis> {
+  const objectUrl = URL.createObjectURL(file);
   try {
-    const { moov, size, head } = await loadMoov(url);
+    return await analyze(async (a, b) => ({ buf: new Uint8Array(await file.slice(a, b + 1).arrayBuffer()), total: file.size, partial: true }), objectUrl);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function analyze(read: RangeReader, url: string): Promise<VideoAnalysis> {
+  try {
+    const { moov, size, head } = await loadMoov(read);
     const { timescale, fragmented, ...meta } = parseMoov(moov);
     let fps = meta.fps;
     let duration = meta.duration;
     if (fragmented && timescale) {
       // L'en-tête d'un MP4 fragmenté ne décrit souvent que le début : on lit la fin du fichier.
-      const tail = size ? await tailFragmentInfo(url, size, timescale).catch(() => undefined) : undefined;
+      const tail = size ? await tailFragmentInfo(read, size, timescale).catch(() => undefined) : undefined;
       if (tail) {
         duration = tail.duration;
         fps = fps || Math.round(tail.fps * 100) / 100;

@@ -23,4 +23,9 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
+  {
+    // Fonctions serveur Vercel (Node)
+    files: ['api/**/*.ts'],
+    languageOptions: { globals: { ...globals.node } },
+  },
 );

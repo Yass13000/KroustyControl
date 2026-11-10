@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, ClipboardCopy, Copy, Film, FolderOpen, FolderPlus, Gauge, Link2, Loader2, MonitorPlay, Play, Plus, RefreshCw, Search, Trash2, Video, XCircle } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, CheckCircle2, CloudUpload, HardDrive, ChevronLeft, ChevronRight, ClipboardCopy, Copy, Film, FolderOpen, FolderPlus, Gauge, Link2, Loader2, MonitorPlay, Play, Plus, RefreshCw, Search, Trash2, Video, XCircle } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
 import { errorMessage, must, useLibrary, useVideoAnalyses } from '../lib/data';
 import { fileExtension, googleDriveThumbnail, isGoogleDrive, parsePlaylist, transformStorageUrl } from '../lib/media';
 import type { Album, AppScreen, Configuration, VideoFile } from '../lib/types';
 import {
   DEFAULT_TARGET,
+  analyzeFile,
   analyzeVideo,
+  readCache,
+  writeCache,
   assess,
   mbps,
   megabytes,
@@ -16,6 +19,7 @@ import {
   type VideoAnalysis,
 } from '../lib/videoAnalysis';
 import { formatDuration } from '../lib/diagnostics';
+import { DropboxSetupError, spaceUsage, uploadVideo } from '../lib/dropbox';
 import { Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Spinner, cn, useFeedback } from './ui';
 
 interface VideosProps {
@@ -106,6 +110,14 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   const [addVideoAlbumId, setAddVideoAlbumId] = useState<string | null>(null);
   const [newVideoName, setNewVideoName] = useState('');
   const [newVideoUrl, setNewVideoUrl] = useState('');
+  // Envoi direct d'un fichier vers Dropbox
+  const [addMode, setAddMode] = useState<'file' | 'link'>('file');
+  const [file, setFile] = useState<File | null>(null);
+  const [fileAnalysis, setFileAnalysis] = useState<VideoAnalysis | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [space, setSpace] = useState<{ used: number; allocated: number } | null>(null);
+  const [uploadUnavailable, setUploadUnavailable] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [busy, setBusy] = useState(false);
 
   const activeAlbum = albums.find(a => a.id === activeAlbumId) || null;
@@ -152,9 +164,76 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   };
 
   const closeAddVideo = () => {
+    abortRef.current?.abort();
     setAddVideoAlbumId(null);
     setNewVideoName('');
     setNewVideoUrl('');
+    setFile(null);
+    setFileAnalysis(null);
+    setProgress(null);
+  };
+
+  // À l'ouverture : espace Dropbox disponible (et détection d'un envoi non configuré).
+  useEffect(() => {
+    if (!addVideoAlbumId) return;
+    let cancelled = false;
+    spaceUsage()
+      .then(sp => !cancelled && (setSpace(sp), setUploadUnavailable(null)))
+      .catch(err => {
+        if (cancelled) return;
+        if (err instanceof DropboxSetupError) {
+          setUploadUnavailable(err.message);
+          setAddMode('link');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [addVideoAlbumId]);
+
+  const pickFile = async (f: File | null) => {
+    setFile(f);
+    setFileAnalysis(null);
+    if (!f) return;
+    if (!newVideoName.trim()) setNewVideoName(f.name.replace(/\.[^.]+$/, ''));
+    setFileAnalysis(await analyzeFile(f));
+  };
+
+  /** Ajoute la vidéo à la bibliothèque (avec miniature si possible). */
+  const insertVideo = async (name: string, url: string, size: string, thumbSource = url) => {
+    const thumbnail = await generateThumbnail(thumbSource);
+    const base = { album_id: addVideoAlbumId, name, url, size };
+    const { error } = await sbClient.from('videos').insert([{ ...base, thumbnail: thumbnail || null }]);
+    if (error) {
+      // Compatibilité : base sans colonne "thumbnail".
+      if (error.message.includes('thumbnail')) must(await sbClient.from('videos').insert([base]));
+      else throw error;
+    }
+  };
+
+  const handleUploadFile = async () => {
+    if (!isSuperAdmin || !addVideoAlbumId || !file) return;
+    const name = newVideoName.trim() || file.name;
+    setBusy(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const localUrl = URL.createObjectURL(file);
+    try {
+      const url = await uploadVideo(file, setProgress, controller.signal);
+      // L'analyse faite avant l'envoi est réutilisée : aucune requête de plus.
+      if (fileAnalysis?.ok) writeCache({ ...readCache(), [url]: fileAnalysis });
+      await insertVideo(name, url, megabytes(file.size), localUrl);
+      toast('Vidéo envoyée');
+      closeAddVideo();
+      await refresh();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : errorMessage(err), 'error');
+      setProgress(null);
+    } finally {
+      URL.revokeObjectURL(localUrl);
+      abortRef.current = null;
+      setBusy(false);
+    }
   };
 
   const handleAddVideoLink = async () => {
@@ -165,16 +244,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
 
     setBusy(true);
     try {
-      const url = transformStorageUrl(rawUrl);
-      const thumbnail = await generateThumbnail(url);
-      const base = { album_id: addVideoAlbumId, name, url, size: 'Lien cloud' };
-
-      const { error } = await sbClient.from('videos').insert([{ ...base, thumbnail: thumbnail || null }]);
-      if (error) {
-        // Compatibilité : base sans colonne "thumbnail".
-        if (error.message.includes('thumbnail')) must(await sbClient.from('videos').insert([base]));
-        else throw error;
-      }
+      await insertVideo(name, transformStorageUrl(rawUrl), 'Lien cloud');
       toast('Vidéo ajoutée');
       closeAddVideo();
       await refresh();
@@ -446,17 +516,23 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
 
       <Modal
         open={!!addVideoAlbumId && isSuperAdmin}
-        onClose={closeAddVideo}
+        onClose={() => progress === null && closeAddVideo()}
         z="z-[60]"
         title="Nouvelle vidéo"
         footer={
           <div className="flex gap-2">
             <Button variant="secondary" block onClick={closeAddVideo}>
-              Annuler
+              {progress !== null ? 'Arrêter' : 'Annuler'}
             </Button>
-            <Button block loading={busy} disabled={!newVideoName.trim() || !newVideoUrl.trim()} onClick={handleAddVideoLink}>
-              {busy ? 'Ajout…' : 'Ajouter'}
-            </Button>
+            {addMode === 'file' ? (
+              <Button block loading={busy} disabled={!file || fileAnalysis === null} icon={<CloudUpload className="h-4.5 w-4.5" />} onClick={handleUploadFile}>
+                {progress !== null ? `${Math.round(progress * 100)} %` : 'Envoyer'}
+              </Button>
+            ) : (
+              <Button block loading={busy} disabled={!newVideoName.trim() || !newVideoUrl.trim()} onClick={handleAddVideoLink}>
+                {busy ? 'Ajout…' : 'Ajouter'}
+              </Button>
+            )}
           </div>
         }
       >
@@ -464,27 +540,87 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
           className="space-y-4"
           onSubmit={e => {
             e.preventDefault();
-            handleAddVideoLink();
+            if (addMode === 'file') handleUploadFile();
+            else handleAddVideoLink();
           }}
         >
-          <div>
-            <Input id="video-name" value={newVideoName} onChange={e => setNewVideoName(e.target.value)} placeholder="Nom" aria-label="Nom" autoFocus />
-          </div>
-          <div>
-            <Input
-              id="video-url"
-              type="url"
-              inputMode="url"
-              value={newVideoUrl}
-              onChange={e => setNewVideoUrl(e.target.value)}
-              placeholder="Lien Dropbox, Drive, mp4"
-              aria-label="Lien"
-              leading={<Link2 className="h-4.5 w-4.5" />}
+          <div className="flex items-center justify-between gap-2">
+            <Segmented
+              size="sm"
+              value={addMode}
+              onChange={setAddMode}
+              disabled={busy}
+              options={[
+                { value: 'file', label: 'Fichier', icon: <CloudUpload className="h-4 w-4" /> },
+                { value: 'link', label: 'Lien', icon: <Link2 className="h-4 w-4" /> },
+              ]}
             />
+            {space && space.allocated > 0 && (
+              <span className={cn('flex items-center gap-1.5 text-xs font-semibold tabular-nums', space.used / space.allocated > 0.9 ? 'text-red-600' : 'text-muted')} title="Espace Dropbox">
+                <HardDrive className="h-3.5 w-3.5" />
+                {megabytes(space.used)} / {megabytes(space.allocated)}
+              </span>
+            )}
           </div>
-          <DraftQuality url={newVideoUrl} />
+
+          <Input id="video-name" value={newVideoName} onChange={e => setNewVideoName(e.target.value)} placeholder="Nom" aria-label="Nom" disabled={busy} />
+
+          {addMode === 'file' ? (
+            uploadUnavailable ? (
+              <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">{uploadUnavailable}</p>
+            ) : (
+              <>
+                <label
+                  className={cn(
+                    'flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed px-4 py-6 text-center transition',
+                    file ? 'border-brand/40 bg-brand-50/40' : 'border-line bg-cream/50 hover:border-brand/50',
+                    busy && 'pointer-events-none opacity-70',
+                  )}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => {
+                    e.preventDefault();
+                    const f = e.dataTransfer.files?.[0];
+                    if (f) pickFile(f);
+                  }}
+                >
+                  <CloudUpload className="h-7 w-7 text-brand" />
+                  {file ? (
+                    <>
+                      <span className="max-w-full truncate text-sm font-bold text-ink">{file.name}</span>
+                      <span className="text-xs text-muted">{megabytes(file.size)}</span>
+                    </>
+                  ) : (
+                    <span className="text-sm font-bold text-ink">Choisir une vidéo</span>
+                  )}
+                  <input type="file" accept="video/mp4,video/quicktime,video/*" className="sr-only" disabled={busy} onChange={e => pickFile(e.target.files?.[0] || null)} />
+                </label>
+
+                {progress !== null && (
+                  <div className="h-2 overflow-hidden rounded-full bg-sand" role="progressbar" aria-valuenow={Math.round(progress * 100)} aria-valuemin={0} aria-valuemax={100}>
+                    <div className="h-full rounded-full bg-brand transition-all duration-300" style={{ width: `${Math.max(3, progress * 100)}%` }} />
+                  </div>
+                )}
+
+                {file && progress === null && <AnalysisLine analysis={fileAnalysis} />}
+              </>
+            )
+          ) : (
+            <>
+              <Input
+                id="video-url"
+                type="url"
+                inputMode="url"
+                value={newVideoUrl}
+                onChange={e => setNewVideoUrl(e.target.value)}
+                placeholder="Lien Dropbox, Drive, mp4"
+                aria-label="Lien"
+                leading={<Link2 className="h-4.5 w-4.5" />}
+              />
+              <DraftQuality url={newVideoUrl} />
+            </>
+          )}
           <button type="submit" className="sr-only">
-            Ajouter
+            Valider
           </button>
         </form>
       </Modal>
@@ -702,6 +838,38 @@ function QualitySheet({
   );
 }
 
+/** Résultat compact d'une analyse (fichier ou lien). */
+function AnalysisLine({ analysis }: { analysis: VideoAnalysis | null }) {
+  if (!analysis) {
+    return (
+      <p className="flex items-center gap-2 px-1 text-sm text-muted">
+        <Loader2 className="h-4 w-4 animate-spin" /> Contrôle de la vidéo…
+      </p>
+    );
+  }
+  const s = assess(analysis, DEFAULT_TARGET);
+  const ui = VERDICT_UI[s.verdict];
+  return (
+    <div className={cn('rounded-2xl p-3 text-sm', ui.tone)}>
+      <p className="flex items-center gap-2 font-bold">
+        {ui.icon}
+        {ui.label}
+      </p>
+      {analysis.ok && (
+        <p className="mt-0.5 opacity-90">
+          {analysis.width}×{analysis.height} · {analysis.fps ? `${Math.round(analysis.fps)} i/s` : '? i/s'} · {(analysis.codec || '').toUpperCase()}
+          {analysis.bitrate ? ` · ${mbps(analysis.bitrate)}` : ''}
+        </p>
+      )}
+      {s.reasons.map(r => (
+        <p key={r} className="opacity-90">
+          {r}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 /** Analyse du lien pendant la saisie, avant même d'ajouter la vidéo. */
 function DraftQuality({ url }: { url: string }) {
   const [state, setState] = useState<{ url: string; analysis?: VideoAnalysis } | null>(null);
@@ -726,33 +894,5 @@ function DraftQuality({ url }: { url: string }) {
   }, [url]);
 
   if (!state) return null;
-  if (!state.analysis) {
-    return (
-      <p className="flex items-center gap-2 px-1 text-sm text-muted">
-        <Loader2 className="h-4 w-4 animate-spin" /> Contrôle de la vidéo…
-      </p>
-    );
-  }
-  const s = assess(state.analysis, DEFAULT_TARGET);
-  const ui = VERDICT_UI[s.verdict];
-  const a = state.analysis;
-  return (
-    <div className={cn('rounded-2xl p-3 text-sm', ui.tone)}>
-      <p className="flex items-center gap-2 font-bold">
-        {ui.icon}
-        {ui.label}
-      </p>
-      {a.ok && (
-        <p className="mt-0.5 opacity-90">
-          {a.width}×{a.height} · {a.fps ? `${Math.round(a.fps)} i/s` : '? i/s'} · {(a.codec || '').toUpperCase()}
-          {a.bitrate ? ` · ${mbps(a.bitrate)}` : ''}
-        </p>
-      )}
-      {s.reasons.map(r => (
-        <p key={r} className="opacity-90">
-          {r}
-        </p>
-      ))}
-    </div>
-  );
+  return <AnalysisLine analysis={state.analysis ?? null} />;
 }
