@@ -3,7 +3,9 @@ import { AlertTriangle, CheckCircle2, CloudUpload, HardDrive, ChevronLeft, Chevr
 import { sbClient } from '../lib/supabase';
 import { errorMessage, must, useLibrary, useVideoAnalyses } from '../lib/data';
 import { fileExtension, googleDriveThumbnail, isGoogleDrive, parsePlaylist, transformStorageUrl } from '../lib/media';
-import type { Album, AppScreen, Configuration, VideoFile } from '../lib/types';
+import type { Album, AppScreen, Configuration, Group, VideoFile } from '../lib/types';
+import { COMMON, libraryAccess, ownerLabel } from '../lib/library';
+import { FORMAT_CODES, FORMAT_SHORT, SOURCE_LABEL, resolveFormat, usageFormats, type FormatSource } from '../lib/videoFormat';
 import {
   DEFAULT_TARGET,
   analyzeFile,
@@ -20,7 +22,7 @@ import {
 } from '../lib/videoAnalysis';
 import { formatDuration } from '../lib/diagnostics';
 import { DropboxSetupError, connectUrl, connectWithCode, spaceUsage, uploadVideo, type SetupState } from '../lib/dropbox';
-import { Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Spinner, cn, useFeedback } from './ui';
+import { Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Select, Spinner, cn, useFeedback } from './ui';
 
 interface VideosProps {
   isSuperAdmin: boolean;
@@ -29,6 +31,8 @@ interface VideosProps {
   screens?: AppScreen[];
   /** Configurations : servent à connaître la taille des murs qui diffusent chaque vidéo. */
   configurations?: Configuration[];
+  /** Restaurants du compte (tous pour l'admin) : chaque dossier appartient à l'un d'eux ou à la bibliothèque commune. */
+  groups?: Group[];
 }
 
 /** Tente de capturer une image de la vidéo (échoue silencieusement si le CORS l'interdit). */
@@ -69,9 +73,25 @@ const generateThumbnail = (url: string): Promise<string> =>
     video.src = url;
   });
 
-export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], configurations = [] }: VideosProps) {
+export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], configurations = [], groups = [] }: VideosProps) {
   const { toast, confirm } = useFeedback();
-  const { albums, videos, loading, refresh } = useLibrary();
+  const library = useLibrary();
+  const { loading, refresh } = library;
+
+  // Chaque compte ne voit que les dossiers de ses restaurants (+ la bibliothèque commune) ; l'admin voit tout.
+  const access = libraryAccess(isSuperAdmin, groups);
+  const [ownerFilter, setOwnerFilter] = useState<string>('all');
+  const albums = library.albums.filter(
+    a => access.canSee(a) && (ownerFilter === 'all' || (ownerFilter === COMMON ? !a.group_id : a.group_id === ownerFilter)),
+  );
+  const visibleAlbumIds = new Set(albums.map(a => a.id));
+  const videos = library.videos.filter(v => visibleAlbumIds.has(v.album_id));
+  const albumOf = (albumId: string | null | undefined) => library.albums.find(a => a.id === albumId);
+  const showOwner = isSuperAdmin || groups.length > 1;
+
+  // Format de mur de chaque vidéo (choisi, sinon déduit : mur de diffusion, nom, dimensions).
+  const usageByFormat = useMemo(() => usageFormats(screens, configurations), [screens, configurations]);
+  const [formatFilter, setFormatFilter] = useState<string>('all');
 
   const [albumSearchQuery, setAlbumSearchQuery] = useState('');
   const [libView, setLibView] = useState<'albums' | 'all' | 'check'>('albums');
@@ -85,6 +105,36 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
     return a ? assess(a, targets.get(url) || DEFAULT_TARGET) : undefined;
   };
   const qualityOf = (url: string) => (analyses.pending.has(url) ? 'pending' : assessmentOf(url)?.verdict);
+  const formatOf = (v: VideoFile) => resolveFormat(v, { usage: usageByFormat, analysis: analyses.results[v.url], albumName: albumOf(v.album_id)?.name });
+  const matchFormat = (v: VideoFile) => formatFilter === 'all' || formatOf(v).format === formatFilter;
+  const formatChips = (list: VideoFile[]) => (
+    <div className="no-scrollbar -mx-1 overflow-x-auto px-1">
+      <Segmented
+        size="sm"
+        value={formatFilter}
+        onChange={setFormatFilter}
+        options={[
+          { value: 'all', label: 'Tous formats' },
+          ...FORMAT_CODES.map(f => {
+            const n = list.filter(v => formatOf(v).format === f).length;
+            return { value: f, label: n ? `${FORMAT_SHORT[f]} · ${n}` : FORMAT_SHORT[f] };
+          }),
+        ]}
+      />
+    </div>
+  );
+
+  /** Enregistre le format choisi à la main (vide = revenir à la déduction automatique). */
+  const saveFormat = async (video: VideoFile, format: string) => {
+    try {
+      must(await sbClient.from('videos').update({ format: format || null }).eq('id', video.id));
+      toast('Format enregistré');
+      await refresh();
+    } catch (err) {
+      const msg = errorMessage(err);
+      toast(msg.includes('format') ? 'Migration 20261111_albums_by_restaurant.sql manquante' : msg, 'error');
+    }
+  };
   const toOptimize = videos.filter(v => {
     const q = qualityOf(v.url);
     return q === 'heavy' || q === 'incompatible' || q === 'unknown';
@@ -107,6 +157,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   const [activeAlbumId, setActiveAlbumId] = useState<string | null>(null);
   const [showCreateAlbum, setShowCreateAlbum] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState('');
+  const [newAlbumGroup, setNewAlbumGroup] = useState<string>('');
   const [addVideoAlbumId, setAddVideoAlbumId] = useState<string | null>(null);
   const [newVideoName, setNewVideoName] = useState('');
   const [newVideoUrl, setNewVideoUrl] = useState('');
@@ -129,12 +180,34 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
 
   /* ------------------------------ Actions ------------------------------ */
 
+  // À l'ouverture de « Nouveau dossier » : restaurant du filtre actif, sinon le premier du gérant.
+  useEffect(() => {
+    if (!showCreateAlbum) return;
+    if (ownerFilter !== 'all' && ownerFilter !== COMMON) setNewAlbumGroup(ownerFilter);
+    else setNewAlbumGroup(isSuperAdmin ? '' : groups[0]?.id || '');
+  }, [showCreateAlbum, ownerFilter, isSuperAdmin, groups]);
+
+  /** Admin : rattache un dossier à un restaurant (ou à la bibliothèque commune). */
+  const setAlbumOwner = async (album: Album, groupId: string) => {
+    try {
+      must(await sbClient.from('albums').update({ group_id: groupId || null }).eq('id', album.id));
+      toast(groupId ? 'Dossier rattaché' : 'Dossier dans la bibliothèque commune');
+      await refresh();
+    } catch (err) {
+      const msg = errorMessage(err);
+      toast(msg.includes('group_id') ? 'Migration 20261111_albums_by_restaurant.sql manquante' : msg, 'error');
+    }
+  };
+
   const handleCreateAlbum = async () => {
     const name = newAlbumName.trim();
-    if (!isSuperAdmin || !name) return;
+    if (!access.canCreate || !name) return;
+    // Un gérant crée toujours dans un de ses restaurants ; l'admin peut aussi créer dans la bibliothèque commune.
+    const groupId = newAlbumGroup || (isSuperAdmin ? '' : groups[0]?.id || '');
+    if (!isSuperAdmin && !groupId) return;
     setBusy(true);
     try {
-      must(await sbClient.from('albums').insert([{ name }]));
+      must(await sbClient.from('albums').insert([{ name, group_id: groupId || null }]));
       toast('Dossier créé');
       setNewAlbumName('');
       setShowCreateAlbum(false);
@@ -147,7 +220,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   };
 
   const handleDeleteAlbum = async (album: Album) => {
-    if (!isSuperAdmin) return;
+    if (!access.canManage(album)) return;
     const count = videosOf(album.id).length;
     const ok = await confirm({
       title: `Supprimer « ${album.name} » ?`,
@@ -235,19 +308,20 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   };
 
   /** Ajoute la vidéo à la bibliothèque (avec miniature si possible). */
-  const insertVideo = async (name: string, url: string, size: string, thumbSource = url) => {
+  const insertVideo = async (name: string, url: string, size: string, thumbSource = url, analysis?: VideoAnalysis | null) => {
     const thumbnail = await generateThumbnail(thumbSource);
+    // Format de mur déduit dès l'ajout (nom de la vidéo ou du dossier, puis dimensions).
+    const { format } = resolveFormat({ id: '', album_id: addVideoAlbumId || '', name, url }, { analysis: analysis || undefined, albumName: albumOf(addVideoAlbumId)?.name });
     const base = { album_id: addVideoAlbumId, name, url, size };
-    const { error } = await sbClient.from('videos').insert([{ ...base, thumbnail: thumbnail || null }]);
-    if (error) {
-      // Compatibilité : base sans colonne "thumbnail".
-      if (error.message.includes('thumbnail')) must(await sbClient.from('videos').insert([base]));
-      else throw error;
-    }
+    let { error } = await sbClient.from('videos').insert([{ ...base, thumbnail: thumbnail || null, format }]);
+    // Compatibilité : base sans colonne « format » ou « thumbnail » (migration non passée).
+    if (error && error.message.includes('format')) ({ error } = await sbClient.from('videos').insert([{ ...base, thumbnail: thumbnail || null }]));
+    if (error && error.message.includes('thumbnail')) ({ error } = await sbClient.from('videos').insert([base]));
+    if (error) throw error;
   };
 
   const handleUploadFile = async () => {
-    if (!isSuperAdmin || !addVideoAlbumId || !file) return;
+    if (!access.canManage(albumOf(addVideoAlbumId)) || !addVideoAlbumId || !file) return;
     const name = newVideoName.trim() || file.name;
     setBusy(true);
     const controller = new AbortController();
@@ -257,7 +331,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
       const url = await uploadVideo(file, setProgress, controller.signal);
       // L'analyse faite avant l'envoi est réutilisée : aucune requête de plus.
       if (fileAnalysis?.ok) writeCache({ ...readCache(), [url]: fileAnalysis });
-      await insertVideo(name, url, megabytes(file.size), localUrl);
+      await insertVideo(name, url, megabytes(file.size), localUrl, fileAnalysis);
       toast('Vidéo envoyée');
       closeAddVideo();
       await refresh();
@@ -272,7 +346,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   };
 
   const handleAddVideoLink = async () => {
-    if (!isSuperAdmin || !addVideoAlbumId) return;
+    if (!access.canManage(albumOf(addVideoAlbumId)) || !addVideoAlbumId) return;
     const name = newVideoName.trim();
     const rawUrl = newVideoUrl.trim();
     if (!name || !rawUrl) return;
@@ -291,7 +365,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   };
 
   const handleDeleteVideo = async (video: VideoFile) => {
-    if (!isSuperAdmin) return;
+    if (!access.canManage(albumOf(video.album_id))) return;
     const ok = await confirm({ title: `Retirer « ${video.name} » ?`, confirmLabel: 'Retirer', danger: true });
     if (!ok) return;
     try {
@@ -319,7 +393,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
       <PageTitle
         title="Vidéos"
         actions={
-          isSuperAdmin && (
+          access.canCreate && (
             <IconButton label="Nouveau dossier" variant="secondary" onClick={() => setShowCreateAlbum(true)}>
               <FolderPlus className="h-5 w-5" />
             </IconButton>
@@ -339,13 +413,28 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
         />
       </div>
 
-      <Input
-        value={albumSearchQuery}
-        onChange={e => setAlbumSearchQuery(e.target.value)}
-        placeholder="Rechercher"
-        leading={<Search className="h-4.5 w-4.5" />}
-        aria-label="Rechercher"
-      />
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="flex-1">
+          <Input
+            value={albumSearchQuery}
+            onChange={e => setAlbumSearchQuery(e.target.value)}
+            placeholder="Rechercher"
+            leading={<Search className="h-4.5 w-4.5" />}
+            aria-label="Rechercher"
+          />
+        </div>
+        {showOwner && (
+          <Select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} aria-label="Restaurant" className="sm:w-60">
+            <option value="all">Tous les restaurants</option>
+            <option value={COMMON}>Bibliothèque commune</option>
+            {groups.map(g => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+          </Select>
+        )}
+      </div>
 
       {libView === 'all' || libView === 'check' ? (
         loading ? (
@@ -356,7 +445,17 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
           (() => {
             const q = albumSearchQuery.trim().toLowerCase();
             const base = libView === 'check' ? toOptimize : videos;
-            const list = base.filter(v => !q || v.name.toLowerCase().includes(q) || (albumName(v.album_id) || '').toLowerCase().includes(q));
+            const searched = base.filter(v => !q || v.name.toLowerCase().includes(q) || (albumName(v.album_id) || '').toLowerCase().includes(q));
+            const list = searched.filter(matchFormat);
+            const chips = formatChips(searched);
+            if (list.length === 0 && searched.length > 0) {
+              return (
+                <div className="space-y-3">
+                  {chips}
+                  <EmptyState icon={<Film className="h-6 w-6" />} title="Aucune vidéo dans ce format" />
+                </div>
+              );
+            }
             if (list.length === 0) {
               return libView === 'check' && !q ? (
                 <EmptyState icon={<CheckCircle2 className="h-6 w-6" />} title="Toutes les vidéos sont légères" />
@@ -365,6 +464,8 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
               );
             }
             return (
+              <div className="space-y-3">
+              {chips}
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
                 {list.map(v => (
                   <VideoCard
@@ -373,13 +474,15 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                     albumLabel={albumName(v.album_id) || 'Sans dossier'}
                     usedOn={usage.get(v.url) || []}
                     quality={qualityOf(v.url)}
+                    format={formatOf(v)}
                     onInspect={() => setInspectId(v.id)}
-                    canDelete={isSuperAdmin}
+                    canDelete={access.canManage(albumOf(v.album_id))}
                     onPlay={() => onPlayVideo(v.url)}
                     onCopy={() => copyVideoLink(v.url)}
                     onDelete={() => handleDeleteVideo(v)}
                   />
                 ))}
+              </div>
               </div>
             );
           })()
@@ -405,11 +508,12 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                   <AlbumCover videos={list} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[15px] font-extrabold uppercase tracking-wide text-ink transition group-hover:text-brand-800">{album.name}</span>
+                    {showOwner && <span className="block truncate text-xs text-muted">{ownerLabel(album, groups)}</span>}
                   </span>
                   <span className="text-sm font-bold tabular-nums text-muted">{list.length}</span>
                   <ChevronRight className="h-5 w-5 flex-shrink-0 text-muted transition group-hover:translate-x-0.5" />
                 </button>
-                {isSuperAdmin && (
+                {access.canManage(album) && (
                   <IconButton label={`Supprimer ${album.name}`} variant="danger" onClick={() => handleDeleteAlbum(album)}>
                     <Trash2 className="h-4.5 w-4.5" />
                   </IconButton>
@@ -430,8 +534,24 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
               </IconButton>
               <div className="min-w-0 flex-1">
                 <h2 className="truncate text-lg font-extrabold uppercase tracking-wide text-ink">{activeAlbum.name}</h2>
+                {showOwner && !isSuperAdmin && <p className="truncate text-xs text-muted">{ownerLabel(activeAlbum, groups)}</p>}
               </div>
               {isSuperAdmin && (
+                <Select
+                  value={activeAlbum.group_id || ''}
+                  onChange={e => setAlbumOwner(activeAlbum, e.target.value)}
+                  aria-label="Restaurant du dossier"
+                  className="hidden w-48 sm:block [&_select]:h-10 [&_select]:text-sm"
+                >
+                  <option value="">Commune</option>
+                  {groups.map(g => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </Select>
+              )}
+              {access.canManage(activeAlbum) && (
                 <IconButton label="Ajouter une vidéo" variant="secondary" onClick={() => setAddVideoAlbumId(activeAlbum.id)}>
                   <Plus className="h-5 w-5" />
                 </IconButton>
@@ -440,21 +560,23 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
           </div>
 
           <div className="mx-auto max-w-4xl px-4 pb-40 pt-5">
-            {videosOf(activeAlbum.id).length === 0 ? (
+            {videosOf(activeAlbum.id).length > 0 && <div className="mb-4">{formatChips(videosOf(activeAlbum.id))}</div>}
+            {videosOf(activeAlbum.id).filter(matchFormat).length === 0 ? (
               <EmptyState
                 icon={<Video className="h-6 w-6" />}
                 title="Dossier vide"
               />
             ) : (
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-                {videosOf(activeAlbum.id).map(v => (
+                {videosOf(activeAlbum.id).filter(matchFormat).map(v => (
                   <VideoCard
                     key={v.id}
                     video={v}
                     usedOn={usage.get(v.url) || []}
                     quality={qualityOf(v.url)}
+                    format={formatOf(v)}
                     onInspect={() => setInspectId(v.id)}
-                    canDelete={isSuperAdmin}
+                    canDelete={access.canManage(albumOf(v.album_id))}
                     onPlay={() => onPlayVideo(v.url)}
                     onCopy={() => copyVideoLink(v.url)}
                     onDelete={() => handleDeleteVideo(v)}
@@ -505,14 +627,41 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
               )
             }
           >
-            {v && <QualitySheet analysis={a} pending={analyses.pending.has(v.url)} target={target} walls={targets.get(v.url)?.walls || []} />}
+            {v && (
+              <div className="space-y-4">
+                {(() => {
+                  const f = formatOf(v);
+                  return (
+                    <div className="flex items-center justify-between gap-3 rounded-2xl border border-line p-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-ink">Format de mur</p>
+                        <p className="text-xs text-muted">{f.source ? SOURCE_LABEL[f.source] : 'inconnu'}</p>
+                      </div>
+                      {access.canManage(albumOf(v.album_id)) ? (
+                        <Select value={v.format || ''} onChange={e => saveFormat(v, e.target.value)} aria-label="Format de mur" className="w-44 [&_select]:h-10 [&_select]:text-sm">
+                          <option value="">{f.format && f.source !== 'saved' ? `Auto (${FORMAT_SHORT[f.format]})` : 'Auto'}</option>
+                          {FORMAT_CODES.map(c => (
+                            <option key={c} value={c}>
+                              {FORMAT_SHORT[c]}
+                            </option>
+                          ))}
+                        </Select>
+                      ) : (
+                        <span className="text-sm font-bold text-ink">{f.format ? FORMAT_SHORT[f.format] : '—'}</span>
+                      )}
+                    </div>
+                  );
+                })()}
+                <QualitySheet analysis={a} pending={analyses.pending.has(v.url)} target={target} walls={targets.get(v.url)?.walls || []} />
+              </div>
+            )}
           </Modal>
         );
       })()}
 
       {/* ======================= MODALES ======================= */}
       <Modal
-        open={showCreateAlbum && isSuperAdmin}
+        open={showCreateAlbum && access.canCreate}
         onClose={() => {
           setShowCreateAlbum(false);
           setNewAlbumName('');
@@ -543,14 +692,24 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
             handleCreateAlbum();
           }}
         >
-          <div>
+          <div className="space-y-3">
             <Input id="album-name" value={newAlbumName} onChange={e => setNewAlbumName(e.target.value)} placeholder="Nom" aria-label="Nom" autoFocus />
+            {(isSuperAdmin || groups.length > 1) && (
+              <Select value={newAlbumGroup} onChange={e => setNewAlbumGroup(e.target.value)} aria-label="Restaurant">
+                {isSuperAdmin ? <option value="">Bibliothèque commune</option> : <option value="" disabled>Choisir le restaurant</option>}
+                {groups.map(g => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </Select>
+            )}
           </div>
         </form>
       </Modal>
 
       <Modal
-        open={!!addVideoAlbumId && isSuperAdmin}
+        open={!!addVideoAlbumId && access.canManage(albumOf(addVideoAlbumId))}
         onClose={() => progress === null && closeAddVideo()}
         z="z-[60]"
         title="Nouvelle vidéo"
@@ -688,6 +847,7 @@ function VideoCard({
   albumLabel,
   usedOn,
   quality,
+  format,
   onInspect,
   canDelete,
   onPlay,
@@ -698,6 +858,7 @@ function VideoCard({
   albumLabel?: string;
   usedOn: string[];
   quality?: Assessment['verdict'] | 'pending';
+  format?: { format: string | null; source: FormatSource | null };
   onInspect: () => void;
   canDelete: boolean;
   onPlay: () => void;
@@ -707,7 +868,7 @@ function VideoCard({
   return (
     <div className="card group overflow-hidden p-2">
       <div className="relative aspect-video overflow-hidden rounded-2xl bg-ink">
-        <VideoThumb video={video} />
+        <VideoThumb video={video} dead={quality === 'unknown'} />
         <button
           type="button"
           onClick={onPlay}
@@ -763,14 +924,30 @@ function VideoCard({
         <p className="truncate text-sm font-bold text-ink" title={video.name}>
           {video.name}
         </p>
-        {albumLabel && <p className="truncate text-xs text-muted">{albumLabel}</p>}
+        <div className="flex min-w-0 items-center gap-1.5">
+          {format?.format && (
+            <button
+              type="button"
+              onClick={onInspect}
+              title={format.source ? `Format ${SOURCE_LABEL[format.source]}` : undefined}
+              className={cn(
+                'flex-shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-bold',
+                format.source === 'saved' ? 'bg-ink text-white' : 'border border-dashed border-muted/50 text-muted',
+              )}
+            >
+              {FORMAT_SHORT[format.format]}
+            </button>
+          )}
+          {albumLabel && <p className="min-w-0 truncate text-xs text-muted">{albumLabel}</p>}
+        </div>
       </div>
     </div>
   );
 }
 
-function VideoThumb({ video, className }: { video: VideoFile; className?: string }) {
-  const [failed, setFailed] = useState(false);
+function VideoThumb({ video, className, dead }: { video: VideoFile; className?: string; dead?: boolean }) {
+  // Lien mort connu : on ne tente pas de charger la vidéo (évite des erreurs réseau en boucle).
+  const [failed, setFailed] = useState(!!dead);
   const cls = cn('h-full w-full object-cover', className);
 
   if (video.thumbnail && !failed) return <img src={video.thumbnail} alt="" loading="lazy" className={cls} onError={() => setFailed(true)} />;

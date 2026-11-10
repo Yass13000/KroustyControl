@@ -292,7 +292,7 @@ export function Main({ user }: { user: User }) {
             />
           )}
 
-          {tab === 'bibliotheque' && <Videos isSuperAdmin={fleet.isSuperAdmin} onPlayVideo={setPlayingVideoSrc} screens={fleet.screens} configurations={fleet.configurations} />}
+          {tab === 'bibliotheque' && <Videos isSuperAdmin={fleet.isSuperAdmin} onPlayVideo={setPlayingVideoSrc} screens={fleet.screens} configurations={fleet.configurations} groups={fleet.groups} />}
 
           {tab === 'maintenance' && (
             <Maintenance groups={fleet.groups} configurations={fleet.configurations} screens={fleet.screens} onChanged={fleet.refresh} />

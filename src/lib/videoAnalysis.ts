@@ -33,6 +33,8 @@ export interface VideoAnalysis {
   bitrate?: number; // bits/s
   hasAudio?: boolean;
   error?: string;
+  /** Date du test (ms) : sert à ne retester un lien en échec qu'une fois par jour */
+  checkedAt?: number;
 }
 
 export interface Assessment {

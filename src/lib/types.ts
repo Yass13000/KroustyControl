@@ -85,6 +85,8 @@ export interface VideoFile {
   size?: string | null;
   thumbnail?: string | null;
   created_at?: string;
+  /** Format de mur : '1x1' | '1x2' | '1x3' | '1x4' | '2x2' (vide = déduit) */
+  format?: string | null;
 }
 
 export type GroupMode = 'global' | 'per-screen';

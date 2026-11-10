@@ -276,7 +276,13 @@ export function useVideoAnalyses(urls: string[]) {
   const key = urls.join('|');
 
   const run = useCallback(async (list: string[], force = false) => {
-    const todo = list.filter(u => u && (force || (!readCache()[u] && !queued.current.has(u))));
+    const cache0 = readCache();
+    const fresh = (u: string) => {
+      const c = cache0[u];
+      // Analyse réussie : définitive. Échec (lien mort…) : retesté au plus une fois par jour.
+      return !!c && (c.ok || (c.checkedAt !== undefined && Date.now() - c.checkedAt < 24 * 3600 * 1000));
+    };
+    const todo = list.filter(u => u && (force || (!fresh(u) && !queued.current.has(u))));
     if (todo.length === 0) return;
     todo.forEach(u => queued.current.add(u));
     setPending(prev => new Set([...prev, ...todo]));
@@ -286,8 +292,7 @@ export function useVideoAnalyses(urls: string[]) {
         const url = queue.shift()!;
         const result = await analyzeVideo(url);
         const cache = readCache();
-        if (result.ok) cache[url] = result;
-        else delete cache[url]; // un échec sera retenté au prochain passage
+        cache[url] = result.ok ? result : { ...result, checkedAt: Date.now() };
         writeCache(cache);
         setResults(prev => ({ ...prev, [url]: result }));
         setPending(prev => {

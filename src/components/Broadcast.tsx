@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
 import Schedules from './Schedules';
+import { albumsForGroups } from '../lib/library';
+import { FORMAT_SHORT, resolveFormat, usageFormats } from '../lib/videoFormat';
 import { errorMessage, mustAll, useLibrary } from '../lib/data';
 import { FORMATS, isOnline, parseFormat, parsePlaylist, transformStorageUrl } from '../lib/media';
 import type { AppScreen, Configuration, Group, GroupMode } from '../lib/types';
@@ -485,7 +487,7 @@ export default function Broadcast({
             )}
           </EditSection>
 
-          <Schedules configId={config.id} videos={library.videos} albums={library.albums} perScreen={mode === 'per-screen'} />
+          <Schedules configId={config.id} videos={library.videos} albums={albumsForGroups(library.albums, new Set([config.group_id]))} perScreen={mode === 'per-screen'} />
         </section>
       );
     }
@@ -525,8 +527,18 @@ export default function Broadcast({
     );
   }
 
-  const pickerVideos = openedAlbumId ? library.videos.filter(v => v.album_id === openedAlbumId) : [];
-  const pickerAlbums = [...library.albums].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  // Format du mur visé : les vidéos de ce format passent en tête de liste.
+  const wallFormat = configurations.find(c => c.id === targetConfigIds[0])?.format;
+  const usageByFormat = usageFormats(screens, configurations);
+  const formatOfVideo = (v: (typeof library.videos)[number]) =>
+    resolveFormat(v, { usage: usageByFormat, albumName: library.albums.find(a => a.id === v.album_id)?.name }).format;
+  const pickerVideos = (openedAlbumId ? library.videos.filter(v => v.album_id === openedAlbumId) : [])
+    .map(v => ({ v, f: formatOfVideo(v) }))
+    .sort((x, y) => Number(!!wallFormat && y.f === wallFormat) - Number(!!wallFormat && x.f === wallFormat))
+    .map(x => x.v);
+  // Seuls les dossiers des restaurants concernés (+ la bibliothèque commune) sont proposés.
+  const targetGroupIds = new Set(targetConfigIds.map(cid => configurations.find(c => c.id === cid)?.group_id).filter((g): g is string => !!g));
+  const pickerAlbums = albumsForGroups(library.albums, targetGroupIds).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
   const openedAlbum = library.albums.find(a => a.id === openedAlbumId);
 
   return (
@@ -705,6 +717,18 @@ export default function Broadcast({
                   <Film className="h-5 w-5" />
                 </span>
                 <span className="min-w-0 flex-1 truncate text-sm font-bold text-ink">{video.name}</span>
+                {(() => {
+                  const f = formatOfVideo(video);
+                  if (!f) return null;
+                  return (
+                    <span
+                      className={cn('flex-shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-bold', f === wallFormat ? 'bg-emerald-100 text-emerald-800' : 'bg-sand text-muted')}
+                      title={f === wallFormat ? 'Format du mur' : 'Autre format'}
+                    >
+                      {FORMAT_SHORT[f]}
+                    </span>
+                  );
+                })()}
                 {justAdded === video.id ? (
                   <Check className="h-5 w-5 text-emerald-600" aria-label="Ajoutée" />
                 ) : (

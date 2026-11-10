@@ -28,19 +28,38 @@ const service = (): Record<string, string> => {
   return key.startsWith('eyJ') ? { apikey: key, Authorization: `Bearer ${key}` } : { apikey: key };
 };
 
-/** Vérifie que l'appel vient d'un admin connecté (jeton de session Supabase). Renvoie une Response d'erreur sinon. */
-export async function requireAdmin(request: Request): Promise<Response | null> {
+/** Identifie l'appelant (jeton de session Supabase) : admin ou gérant d'au moins un restaurant. */
+async function caller(request: Request): Promise<{ isAdmin: boolean; ownsRestaurant: boolean } | Response> {
   const jwt = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
   if (!jwt) return json({ error: 'unauthorized' }, 401);
 
-  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim(), Authorization: `Bearer ${jwt}` } });
+  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: env('SUPABASE_SERVICE_ROLE_KEY'), Authorization: `Bearer ${jwt}` } });
   if (!userRes.ok) return json({ error: 'unauthorized' }, 401);
   const user = (await userRes.json()) as { id: string; app_metadata?: { role?: string }; user_metadata?: { role?: string } };
+  const id = encodeURIComponent(user.id);
 
-  const profileRes = await fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=role`, { headers: service() });
+  const [profileRes, groupsRes] = await Promise.all([
+    fetch(`${SUPABASE_URL}/rest/v1/profiles?id=eq.${id}&select=role`, { headers: service() }),
+    fetch(`${SUPABASE_URL}/rest/v1/groups?user_id=eq.${id}&select=id&limit=1`, { headers: service() }),
+  ]);
   const rows = profileRes.ok ? ((await profileRes.json()) as { role?: string }[]) : [];
+  const groups = groupsRes.ok ? ((await groupsRes.json()) as unknown[]) : [];
   const isAdmin = rows[0]?.role === 'admin' || user.app_metadata?.role === 'super_admin' || user.user_metadata?.role === 'super_admin';
-  return isAdmin ? null : json({ error: 'forbidden' }, 403);
+  return { isAdmin, ownsRestaurant: groups.length > 0 };
+}
+
+/** Réservé à l'admin (ex. connecter Dropbox). Renvoie une Response d'erreur sinon. */
+export async function requireAdmin(request: Request): Promise<Response | null> {
+  const c = await caller(request);
+  if (c instanceof Response) return c;
+  return c.isAdmin ? null : json({ error: 'forbidden' }, 403);
+}
+
+/** Envoi de vidéos : l'admin, ou un gérant qui a au moins un restaurant. */
+export async function requireUploader(request: Request): Promise<Response | null> {
+  const c = await caller(request);
+  if (c instanceof Response) return c;
+  return c.isAdmin || c.ownsRestaurant ? null : json({ error: 'forbidden' }, 403);
 }
 
 export async function readSetting(key: string): Promise<string | null> {
