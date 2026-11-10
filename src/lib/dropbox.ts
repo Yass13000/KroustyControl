@@ -8,26 +8,64 @@ import { transformStorageUrl } from './media';
 const CHUNK = 8 * 1024 * 1024; // 8 Mo par morceau
 const FOLDER = '/videos';
 
-export class DropboxSetupError extends Error {}
+export type SetupState = 'offline' | 'not_configured' | 'not_connected';
+
+export class DropboxSetupError extends Error {
+  constructor(message: string, readonly state: SetupState) {
+    super(message);
+  }
+}
 
 let cached: { token: string; expiresAt: number } | null = null;
+
+async function authHeaders() {
+  const { data } = await sbAuth.auth.getSession();
+  const jwt = data.session?.access_token;
+  if (!jwt) throw new Error('Session expirée, reconnectez-vous');
+  return { Authorization: `Bearer ${jwt}` };
+}
+
+/** Adresse Dropbox où autoriser l'app (étape 1 de « Connecter Dropbox »). */
+export async function connectUrl(): Promise<string> {
+  const res = await fetch('/api/dropbox-connect', { headers: await authHeaders() });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.url) throw new Error('Impossible d’ouvrir Dropbox');
+  return body.url;
+}
+
+/** Enregistre la connexion à partir du code affiché par Dropbox (étape 2). */
+export async function connectWithCode(code: string) {
+  const res = await fetch('/api/dropbox-connect', {
+    method: 'POST',
+    headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      body.error === 'invalid_code'
+        ? 'Code refusé ou expiré : recommencez l’autorisation'
+        : body.error === 'storage_failed'
+          ? 'Migration 20261111_app_settings.sql manquante'
+          : `Erreur ${res.status}`,
+    );
+  }
+  cached = null;
+}
 
 /** Accès Dropbox temporaire (mis en cache jusqu'à 1 min avant expiration). */
 async function getToken(): Promise<string> {
   if (cached && Date.now() < cached.expiresAt - 60_000) return cached.token;
-  const { data } = await sbAuth.auth.getSession();
-  const jwt = data.session?.access_token;
-  if (!jwt) throw new Error('Session expirée, reconnectez-vous');
-
   let res: Response;
   try {
-    res = await fetch('/api/dropbox-token', { method: 'POST', headers: { Authorization: `Bearer ${jwt}` } });
+    res = await fetch('/api/dropbox-token', { method: 'POST', headers: await authHeaders() });
   } catch {
-    throw new DropboxSetupError('Service d’envoi injoignable');
+    throw new DropboxSetupError('Service d’envoi injoignable', 'offline');
   }
-  if (res.status === 404) throw new DropboxSetupError('Envoi disponible uniquement sur la version en ligne');
+  if (res.status === 404) throw new DropboxSetupError('Envoi disponible uniquement sur la version en ligne', 'offline');
   const body = await res.json().catch(() => ({}));
-  if (res.status === 503) throw new DropboxSetupError('Dropbox n’est pas encore configuré sur Vercel');
+  if (res.status === 503) throw new DropboxSetupError('Clés Dropbox à ajouter dans Vercel', 'not_configured');
+  if (res.status === 409) throw new DropboxSetupError('Dropbox à connecter', 'not_connected');
   if (res.status === 403) throw new Error('Réservé aux administrateurs');
   if (!res.ok) throw new Error(body.error === 'dropbox_auth' ? 'Accès Dropbox refusé : vérifier la configuration' : `Erreur ${res.status}`);
 

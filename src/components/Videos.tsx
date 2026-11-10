@@ -19,7 +19,7 @@ import {
   type VideoAnalysis,
 } from '../lib/videoAnalysis';
 import { formatDuration } from '../lib/diagnostics';
-import { DropboxSetupError, spaceUsage, uploadVideo } from '../lib/dropbox';
+import { DropboxSetupError, connectUrl, connectWithCode, spaceUsage, uploadVideo, type SetupState } from '../lib/dropbox';
 import { Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Spinner, cn, useFeedback } from './ui';
 
 interface VideosProps {
@@ -116,7 +116,9 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   const [fileAnalysis, setFileAnalysis] = useState<VideoAnalysis | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [space, setSpace] = useState<{ used: number; allocated: number } | null>(null);
-  const [uploadUnavailable, setUploadUnavailable] = useState<string | null>(null);
+  const [uploadUnavailable, setUploadUnavailable] = useState<{ message: string; state: SetupState } | null>(null);
+  const [connectCode, setConnectCode] = useState('');
+  const [connecting, setConnecting] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -174,6 +176,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   };
 
   // À l'ouverture : espace Dropbox disponible (et détection d'un envoi non configuré).
+  const [setupCheck, setSetupCheck] = useState(0);
   useEffect(() => {
     if (!addVideoAlbumId) return;
     let cancelled = false;
@@ -182,14 +185,43 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
       .catch(err => {
         if (cancelled) return;
         if (err instanceof DropboxSetupError) {
-          setUploadUnavailable(err.message);
-          setAddMode('link');
+          setUploadUnavailable({ message: err.message, state: err.state });
+          // Dropbox à connecter : on reste sur « Fichier » pour proposer la connexion.
+          if (err.state !== 'not_connected') setAddMode('link');
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [addVideoAlbumId]);
+  }, [addVideoAlbumId, setupCheck]);
+
+  const openDropboxAuthorize = async () => {
+    // Onglet ouvert tout de suite (sinon Safari le bloque comme pop-up), puis dirigé vers Dropbox.
+    const tab = window.open('about:blank', '_blank');
+    try {
+      const url = await connectUrl();
+      if (tab) tab.location.href = url;
+      else window.location.href = url;
+    } catch (err) {
+      tab?.close();
+      toast(errorMessage(err), 'error');
+    }
+  };
+
+  const submitConnectCode = async () => {
+    if (!connectCode.trim()) return;
+    setConnecting(true);
+    try {
+      await connectWithCode(connectCode);
+      setConnectCode('');
+      toast('Dropbox connecté');
+      setSetupCheck(n => n + 1);
+    } catch (err) {
+      toast(errorMessage(err), 'error');
+    } finally {
+      setConnecting(false);
+    }
+  };
 
   const pickFile = async (f: File | null) => {
     setFile(f);
@@ -566,8 +598,21 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
           <Input id="video-name" value={newVideoName} onChange={e => setNewVideoName(e.target.value)} placeholder="Nom" aria-label="Nom" disabled={busy} />
 
           {addMode === 'file' ? (
-            uploadUnavailable ? (
-              <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">{uploadUnavailable}</p>
+            uploadUnavailable?.state === 'not_connected' ? (
+              <div className="space-y-3 rounded-2xl border border-line bg-cream/60 p-4">
+                <p className="text-sm font-bold text-ink">Connecter Dropbox</p>
+                <Button variant="secondary" block icon={<Link2 className="h-4 w-4" />} onClick={openDropboxAuthorize}>
+                  1. Autoriser dans Dropbox
+                </Button>
+                <div className="flex gap-2">
+                  <Input value={connectCode} onChange={e => setConnectCode(e.target.value)} placeholder="2. Coller le code" aria-label="Code Dropbox" className="h-11" />
+                  <Button className="h-11" loading={connecting} disabled={!connectCode.trim()} onClick={submitConnectCode}>
+                    OK
+                  </Button>
+                </div>
+              </div>
+            ) : uploadUnavailable ? (
+              <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">{uploadUnavailable.message}</p>
             ) : (
               <>
                 <label
