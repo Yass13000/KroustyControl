@@ -46,8 +46,12 @@ export async function connectWithCode(code: string) {
       body.error === 'invalid_code'
         ? 'Code refusé ou expiré : recommencez l’autorisation'
         : body.error === 'storage_failed'
-          ? 'Migration 20261111_app_settings.sql manquante'
-          : `Erreur ${res.status}`,
+          ? 'Enregistrement refusé : vérifier SUPABASE_SERVICE_ROLE_KEY (clé service_role) dans Vercel'
+          : body.error === 'forbidden'
+            ? 'Réservé aux administrateurs'
+            : body.error === 'not_configured'
+              ? `Variable manquante dans Vercel : ${(body.missing || []).join(', ')}`
+              : `Erreur ${res.status}`,
     );
   }
   cached = null;

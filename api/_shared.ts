@@ -18,9 +18,14 @@ export function visibleEnvNames() {
   return Object.keys(process.env).filter(k => /SUPABASE|DROPBOX/i.test(k)).sort();
 }
 
-const service = () => {
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  return { apikey: key, Authorization: `Bearer ${key}` };
+/**
+ * En-têtes d'accès « service ». Deux formats de clé existent chez Supabase :
+ *  - ancienne clé service_role (JWT « eyJ… ») : apikey + Authorization ;
+ *  - nouvelle clé secrète (« sb_secret_… ») : uniquement l'en-tête apikey (ce n'est pas un JWT).
+ */
+const service = (): Record<string, string> => {
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  return key.startsWith('eyJ') ? { apikey: key, Authorization: `Bearer ${key}` } : { apikey: key };
 };
 
 /** Vérifie que l'appel vient d'un admin connecté (jeton de session Supabase). Renvoie une Response d'erreur sinon. */
@@ -28,7 +33,7 @@ export async function requireAdmin(request: Request): Promise<Response | null> {
   const jwt = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
   if (!jwt) return json({ error: 'unauthorized' }, 401);
 
-  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!, Authorization: `Bearer ${jwt}` } });
+  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim(), Authorization: `Bearer ${jwt}` } });
   if (!userRes.ok) return json({ error: 'unauthorized' }, 401);
   const user = (await userRes.json()) as { id: string; app_metadata?: { role?: string }; user_metadata?: { role?: string } };
 
