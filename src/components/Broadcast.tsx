@@ -485,7 +485,7 @@ export default function Broadcast({
             )}
           </EditSection>
 
-          <Schedules configId={config.id} videos={library.videos} albums={library.albums} />
+          <Schedules configId={config.id} videos={library.videos} albums={library.albums} perScreen={mode === 'per-screen'} />
         </section>
       );
     }

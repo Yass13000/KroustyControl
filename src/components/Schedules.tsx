@@ -54,7 +54,7 @@ export function activeSchedule(list: Schedule[], now: number) {
     .sort((x, y) => toMin(y.start_time) - toMin(x.start_time))[0];
 }
 
-export default function Schedules({ configId, videos, albums }: { configId: string; videos: VideoFile[]; albums: Album[] }) {
+export default function Schedules({ configId, videos, albums, perScreen = false }: { configId: string; videos: VideoFile[]; albums: Album[]; perScreen?: boolean }) {
   const { toast, confirm } = useFeedback();
   const now = useNow(30000);
   const [list, setList] = useState<Schedule[]>([]);
@@ -116,6 +116,21 @@ export default function Schedules({ configId, videos, albums }: { configId: stri
 
   // Table absente (migration non passée) : la section n'apparaît pas.
   if (available === false || available === null) return null;
+
+  // Mode « Séparé » : un créneau imposerait la même playlist à tous les écrans
+  // et ferait perdre les playlists propres à chaque écran. On ne le propose pas.
+  if (perScreen && list.length === 0) {
+    return (
+      <div className="flex items-center gap-3 rounded-2xl border border-sand bg-cream/50 p-4">
+        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-white text-muted">
+          <CalendarClock className="h-4.5 w-4.5" />
+        </span>
+        <p className="text-sm text-muted">
+          <span className="font-bold text-ink">Programmation</span> disponible en mode Unique
+        </p>
+      </div>
+    );
+  }
 
   const picker = list.find(s => s.id === pickerFor);
   const albumVideos = openedAlbum ? videos.filter(v => v.album_id === openedAlbum) : [];

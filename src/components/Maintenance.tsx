@@ -277,7 +277,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
   const sendCommand = async (s: AppScreen, command: ScreenCommand) => {
     const ok = await confirm({
       title: `${commandLabel(command)} ?`,
-      message: `${s.id} · exécuté sous 15 s si l’écran est en ligne`,
+      message: `${s.id} · exécuté sous 30 s si l’écran est en ligne (1 min en veille)`,
       confirmLabel: 'Envoyer',
       danger: command === 'clear_cache',
     });
