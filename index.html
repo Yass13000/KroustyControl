@@ -2,36 +2,35 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>KroustyControl</title>
-    
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
+    <meta name="description" content="Pilotage des écrans KroustyControl">
 
-    <link class="rounded-xl" rel="apple-touch-icon" href="/iconmob.png">
-    <link rel="icon" type="image/png" href="/iconmob.png">
-    
-    <!-- Google Fonts - Outfit -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="64x64" href="/icons/favicon.png">
+
+    <!-- Police Outfit -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <!-- Police du logo vectoriel (display=block : pas de saut de police pendant l'animation) -->
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@800;900&display=block" rel="stylesheet">
 
-    <meta name="theme-color" content="#ff751f">
-    
-    <!-- PWA Config & iOS Support -->
+    <meta name="theme-color" content="#f97933">
+
+    <!-- PWA & iOS -->
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="KroustyControl">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    
-    <!-- iOS Splash Screen -->
     <link rel="apple-touch-startup-image" href="/apple-splash.png">
-    
     <link rel="manifest" href="/manifest.json">
 </head>
-<body class="bg-[#faf6f0] text-[#b74b1b] antialiased font-sans">
-    <div id="root"></div>
+<body>
+    <div id="root">
+        <!-- Fond sombre affiché avant le chargement de React : enchaîne sans flash avec le splash animé -->
+        <div style="position:fixed;inset:0;background:#140a06"></div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>

@@ -1,810 +1,803 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useMemo, useState, type ChangeEvent } from 'react';
+import { Camera, ChevronLeft, ChevronRight, Film, Hourglass, ImagePlus, LayoutGrid, Monitor, MonitorPlay, Plus, Search, Store, Trash2, Unplug, UserRound } from 'lucide-react';
+import { sbClient } from '../lib/supabase';
+import { errorMessage, must, useAccounts, useLibrary } from '../lib/data';
+import { FORMATS, fileNameFromUrl, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from '../lib/media';
+import type { AppScreen, Configuration, Group, Profile } from '../lib/types';
+import { Badge, Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Select, Spinner, StatusDot, cn, useFeedback } from './ui';
 
-// EXPORT DU TYPE PERSONNALISÉ POUR ÉVITER LA COLLISION AVEC LE TYPE SCREEN DU NAVIGATEUR
-export interface AppScreen {
-  id: string;
-  configuration_id: string | null;
-  last_ping: string | null;
-  pos_x: number;
-  pos_y: number;
-  total_cols: number;
-  total_rows: number;
-  video_url: string | null;
-  audio_url: string | null;
-}
-
-interface Group {
-  id: string;
-  name: string;
-  image_url: string | null;
-}
-
-interface Configuration {
-  id: string;
-  group_id: string;
-  name: string;
-  format: string;
-}
+export type { AppScreen } from '../lib/types';
 
 interface ScreensProps {
-  availableScreens: AppScreen[];
-  availableGroups: Group[];
-  sbClient: any;
-  openFolders: Record<string, boolean>;
-  setOpenFolders: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+  groups: Group[];
+  configurations: Configuration[];
+  screens: AppScreen[];
+  isSuperAdmin: boolean;
+  loading: boolean;
+  onChanged: () => void;
+  now: number;
 }
 
-export default function Screens({
-  availableScreens = [],
-  availableGroups = [],
-  sbClient,
-  openFolders,
-  setOpenFolders
-}: ScreensProps) {
+/** Valeurs d'un écran remis « en attente » (non assigné). */
+const UNASSIGNED = {
+  configuration_id: null,
+  total_cols: 1,
+  total_rows: 1,
+  pos_x: 0,
+  pos_y: 0,
+  video_url: '',
+  audio_url: '',
+};
+
+export default function Screens({ groups, configurations, screens, isSuperAdmin, loading, onChanged, now }: ScreensProps) {
+  const { toast, confirm } = useFeedback();
+
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
-  const [newGroupImageUrl, setNewGroupImageUrl] = useState(''); 
-  const [uploadingImage, setUploadingImage] = useState(false); 
-  const [currentFilter, setCurrentFilter] = useState<'all' | 'unassigned'>('all');
+  const [newGroupImageUrl, setNewGroupImageUrl] = useState('');
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [view, setView] = useState<'restaurants' | 'all' | 'unassigned'>('restaurants');
+  const [statusFilter, setStatusFilter] = useState<'any' | 'online' | 'offline'>('any');
+  const library = useLibrary();
+  const accounts = useAccounts(isSuperAdmin);
 
-  const [localGroups, setLocalGroups] = useState<Group[]>(availableGroups);
-  const [localConfigurations, setLocalConfigurations] = useState<Configuration[]>([]);
-  const [localScreens, setLocalScreens] = useState<AppScreen[]>(availableScreens);
-
-  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
-  const [selectedConfig, setSelectedConfig] = useState<Configuration | null>(null);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null);
   const [newConfigName, setNewConfigName] = useState('');
   const [newConfigFormat, setNewConfigFormat] = useState('1x1');
+  const [assignTarget, setAssignTarget] = useState<{ configId: string; format: string; x: number; y: number; displayNum: number } | null>(null);
 
-  const [showAssignModal, setShowAssignModal] = useState(false);
-  const [assignTarget, setAssignTarget] = useState<{
-    configId: string;
-    format: string;
-    x: number;
-    y: number;
-    displayNum: number;
-  } | null>(null);
+  // Les objets sélectionnés sont dérivés des données : s'ils disparaissent (temps réel), la modale se ferme seule.
+  const selectedGroup = groups.find(g => g.id === selectedGroupId) || null;
+  const selectedConfig = selectedGroup ? configurations.find(c => c.id === selectedConfigId && c.group_id === selectedGroup.id) || null : null;
 
-  const [now, setNow] = useState(new Date().getTime());
+  const online = (s: AppScreen) => isOnline(s.last_ping, now);
+  const unassignedScreens = useMemo(() => screens.filter(s => !s.configuration_id), [screens]);
+  const filteredGroups = groups.filter(g => g.name?.toLowerCase().includes(searchQuery.toLowerCase()));
 
-  useEffect(() => {
-    const interval = setInterval(() => setNow(new Date().getTime()), 5000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const isScreenOnline = (lastPing: string | null) => {
-    if (!lastPing) return false;
-    return (now - new Date(lastPing).getTime()) / 1000 < 720;
-  };
-
-  const refreshAllData = useCallback(async () => {
+  /** Exécute une action, affiche le résultat et rafraîchit les données. */
+  const run = async (action: () => Promise<unknown>, success?: string) => {
     try {
-      const { data: grp } = await sbClient.from('groups').select('*').order('name', { ascending: true });
-      const { data: conf } = await sbClient.from('configurations').select('*').order('name', { ascending: true });
-      const { data: scr = [] } = await sbClient.from('screens_config').select('*').order('id', { ascending: true });
-      
-      if (grp) setLocalGroups(grp);
-      if (conf) setLocalConfigurations(conf);
-      if (scr) setLocalScreens(scr);
+      await action();
+      if (success) toast(success);
+      onChanged();
+      return true;
     } catch (err) {
-      console.error("Erreur d'interrogation du cache realtime :", err);
+      console.error(err);
+      toast(errorMessage(err), 'error');
+      return false;
     }
-  }, [sbClient]);
-
-  useEffect(() => {
-    refreshAllData();
-
-    const databaseChannel = sbClient
-      .channel('table-db-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'groups' }, () => refreshAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'configurations' }, () => refreshAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'screens_config' }, () => refreshAllData())
-      .subscribe();
-
-    return () => {
-      sbClient.removeChannel(databaseChannel);
-    };
-  }, [sbClient, refreshAllData]);
-
-  // Sécurité Realtime : Ferme automatiquement les fenêtres modales si les données associées disparaissent via un autre appareil
-  useEffect(() => {
-    if (selectedGroup) {
-      const existeEncore = localGroups.some(g => g.id === selectedGroup.id);
-      if (!existeEncore) {
-        setSelectedGroup(null);
-        setSelectedConfig(null);
-      }
-    }
-  }, [localGroups, selectedGroup]);
-
-  useEffect(() => {
-    if (selectedConfig) {
-      const existeEncore = localConfigurations.some(c => c.id === selectedConfig.id);
-      if (!existeEncore) {
-        setSelectedConfig(null);
-      }
-    }
-  }, [localConfigurations, selectedConfig]);
-
-  const toggleCreateForm = () => {
-    setShowCreateForm(prev => !prev);
   };
 
-  // PARSER DE LIENS DIRECTS DROPBOX / GOOGLE DRIVE
-  const getAuthenticatedUrl = (url: string) => {
-    if (!url) return '';
-    let finalUrl = url.trim();
-    
-    // Traitement des liens Dropbox partagés standard
-    if (finalUrl.includes("dropbox.com") && !finalUrl.includes("raw=1")) {
-      finalUrl = finalUrl.replace("?dl=0", "").replace("&dl=0", "");
-      finalUrl += finalUrl.includes("?") ? "&raw=1" : "?raw=1";
-    }
+  /* ------------------------------ Images ------------------------------ */
 
-    // Traitement des liens Google Drive partagés standard
-    if (finalUrl.includes("drive.google.com")) {
-      const match = finalUrl.match(/\/d\/(.+?)\/(view|edit)/);
-      if (match && match[1]) {
-        finalUrl = `https://drive.google.com/uc?export=download&id=${match[1]}`;
-      }
-    }
-    
-    return finalUrl;
+  const uploadRestaurantImage = async (file: File, prefix: string) => {
+    const ext = file.name.split('.').pop();
+    const path = `${prefix}-${Date.now()}.${ext}`;
+    must(await sbClient.storage.from('medias').upload(path, file, { upsert: true }));
+    return sbClient.storage.from('medias').getPublicUrl(path).data.publicUrl;
   };
 
-  const uploadRestaurantImage = async (file: File, pathPrefix: string): Promise<string> => {
-    const fileExt = file.name.split('.').pop();
-    const filePath = `${pathPrefix}-${Date.now()}.${fileExt}`;
-    
-    const { error: uploadError } = await sbClient.storage
-      .from('medias')
-      .upload(filePath, file, { upsert: true });
-
-    if (uploadError) throw uploadError;
-
-    const { data: { publicUrl } } = sbClient.storage
-      .from('medias')
-      .getPublicUrl(filePath);
-
-    return publicUrl;
-  };
-
-  const handleCreateImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCreateImageUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     setUploadingImage(true);
     try {
-      const publicUrl = await uploadRestaurantImage(file, 'new-restaurant');
-      setNewGroupImageUrl(publicUrl);
+      setNewGroupImageUrl(await uploadRestaurantImage(file, 'new-restaurant'));
     } catch (err) {
-      console.error(err);
+      toast(`Envoi de l'image impossible : ${errorMessage(err)}`, 'error');
     } finally {
       setUploadingImage(false);
     }
   };
 
-  const handlePopupImageChange = async (e: React.ChangeEvent<HTMLInputElement>, groupId: string) => {
+  const handleGroupImageChange = async (e: ChangeEvent<HTMLInputElement>, groupId: string) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     setUploadingImage(true);
-    try {
-      const publicUrl = await uploadRestaurantImage(file, `group-${groupId}`);
-      await sbClient.from('groups').update({ image_url: publicUrl }).eq('id', groupId);
-      if (selectedGroup?.id === groupId) {
-        setSelectedGroup(prev => prev ? { ...prev, image_url: publicUrl } : null);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setUploadingImage(false);
-    }
+    await run(async () => {
+      const url = await uploadRestaurantImage(file, `group-${groupId}`);
+      must(await sbClient.from('groups').update({ image_url: url }).eq('id', groupId));
+    }, 'Photo mise à jour');
+    setUploadingImage(false);
   };
+
+  /* ------------------------------ Actions ------------------------------ */
 
   const submitNewGroup = async () => {
     const name = newGroupName.trim();
     if (!name) return;
-    await sbClient.from('groups').insert([{ 
-      name, 
-      image_url: newGroupImageUrl.trim() || null 
-    }]);
-    setNewGroupName('');
-    setNewGroupImageUrl('');
-    setShowCreateForm(false);
+    setCreating(true);
+    const ok = await run(
+      async () => must(await sbClient.from('groups').insert([{ name, image_url: newGroupImageUrl.trim() || null }])),
+      `Restaurant « ${name} » créé`,
+    );
+    setCreating(false);
+    if (ok) {
+      setNewGroupName('');
+      setNewGroupImageUrl('');
+      setShowCreateForm(false);
+    }
   };
 
   const createNewConfiguration = async () => {
     const name = newConfigName.trim();
     if (!name || !selectedGroup) return;
-    await sbClient.from('configurations').insert([{
-      group_id: selectedGroup.id,
-      name,
-      format: newConfigFormat
-    }]);
-    setNewConfigName('');
+    const ok = await run(
+      async () => must(await sbClient.from('configurations').insert([{ group_id: selectedGroup.id, name, format: newConfigFormat }])),
+      'Configuration créée',
+    );
+    if (ok) setNewConfigName('');
   };
 
-  const deleteGroup = async (groupId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirm("Supprimer ce restaurant ainsi que toutes ses configurations et renvoyer toutes ses dalles en attente ?")) {
-      try {
-        const configIds = localConfigurations.filter(c => c.group_id === groupId).map(c => c.id);
-        
-        if (configIds.length > 0) {
-          await sbClient.from('screens_config')
-            .update({
-              configuration_id: null,
-              total_cols: 1,
-              total_rows: 1,
-              pos_x: 0,
-              pos_y: 0,
-              video_url: '',
-              audio_url: ''
-            })
-            .in('configuration_id', configIds);
-          
-          await sbClient.from('configurations').delete().in('id', configIds);
-        }
-
-        await sbClient.from('groups').delete().eq('id', groupId);
-        
-        if (selectedGroup?.id === groupId) {
-          setSelectedGroup(null);
-          setSelectedConfig(null);
-        }
-      } catch (err) {
-        console.error("Erreur nettoyage cascade groupe :", err);
+  const deleteGroup = async (group: Group) => {
+    const ok = await confirm({
+      title: `Supprimer « ${group.name} » ?`,
+      message: 'Ses écrans repasseront en attente.',
+      confirmLabel: 'Supprimer',
+      danger: true,
+    });
+    if (!ok) return;
+    await run(async () => {
+      const configIds = configurations.filter(c => c.group_id === group.id).map(c => c.id);
+      if (configIds.length > 0) {
+        must(await sbClient.from('screens_config').update(UNASSIGNED).in('configuration_id', configIds));
+        must(await sbClient.from('configurations').delete().in('id', configIds));
       }
-    }
+      must(await sbClient.from('groups').delete().eq('id', group.id));
+      setSelectedGroupId(null);
+      setSelectedConfigId(null);
+    }, 'Restaurant supprimé');
   };
 
-  const deleteConfiguration = async (configId: string, e: React.MouseEvent) => {
-    e.stopPropagation(); 
-    if (confirm("Supprimer cette configuration de dalles ? Toutes les dalles rattachées retourneront en attente.")) {
-      try {
-        await sbClient.from('screens_config')
-          .update({
-            configuration_id: null,
-            total_cols: 1,
-            total_rows: 1,
-            pos_x: 0,
-            pos_y: 0,
-            video_url: '',
-            audio_url: ''
-          })
-          .eq('configuration_id', configId);
-
-        await sbClient.from('configurations').delete().eq('id', configId);
-        
-        if (selectedConfig?.id === configId) {
-          setSelectedConfig(null);
-        }
-      } catch (err) {
-        console.error("Erreur nettoyage cascade configuration :", err);
-      }
-    }
+  const deleteConfiguration = async (config: Configuration) => {
+    const ok = await confirm({
+      title: `Supprimer « ${config.name} » ?`,
+      message: 'Ses écrans repasseront en attente.',
+      confirmLabel: 'Supprimer',
+      danger: true,
+    });
+    if (!ok) return;
+    await run(async () => {
+      must(await sbClient.from('screens_config').update(UNASSIGNED).eq('configuration_id', config.id));
+      must(await sbClient.from('configurations').delete().eq('id', config.id));
+      if (selectedConfigId === config.id) setSelectedConfigId(null);
+    }, 'Configuration supprimée');
   };
 
   const deleteScreen = async (screenId: string) => {
-    if (confirm("Supprimer cet appareil ?")) {
-      await sbClient.from('screens_config').delete().eq('id', screenId);
-    }
+    const ok = await confirm({ title: `Supprimer l'appareil ${screenId} ?`, confirmLabel: 'Supprimer', danger: true });
+    if (ok) await run(async () => must(await sbClient.from('screens_config').delete().eq('id', screenId)), 'Appareil supprimé');
   };
 
-  const changeConfigFormat = async (configId: string, nextFormat: string) => {
-    try {
-      const [nextRows, nextCols] = nextFormat.split('x').map(Number);
-
-      await sbClient.from('screens_config')
-        .update({
-          configuration_id: null,
-          total_cols: 1,
-          total_rows: 1,
-          pos_x: 0,
-          pos_y: 0,
-          video_url: '',
-          audio_url: ''
-        })
-        .eq('configuration_id', configId)
-        .or(`pos_x.gte.${nextCols},pos_y.gte.${nextRows}`);
-
-      await sbClient.from('screens_config')
-        .update({
-          total_cols: nextCols,
-          total_rows: nextRows
-        })
-        .eq('configuration_id', configId)
-        .lt('pos_x', nextCols)
-        .lt('pos_y', nextRows);
-
-      await sbClient.from('configurations').update({ format: nextFormat }).eq('id', configId);
-      
-      if (selectedConfig && selectedConfig.id === configId) {
-        setSelectedConfig(prev => prev ? { ...prev, format: nextFormat } : null);
-      }
-    } catch (err) {
-      console.error("Erreur ajustement dynamique format :", err);
+  const changeConfigFormat = async (config: Configuration, nextFormat: string) => {
+    const { rows, cols } = parseFormat(nextFormat);
+    const willDetach = screens.filter(s => s.configuration_id === config.id && (s.pos_x >= cols || s.pos_y >= rows)).length;
+    if (willDetach > 0) {
+      const ok = await confirm({
+        title: `Passer en ${nextFormat} ?`,
+        message: `${willDetach} écran${willDetach > 1 ? 's' : ''} hors de la nouvelle grille repasser${willDetach > 1 ? 'ont' : 'a'} en attente.`,
+        confirmLabel: 'Changer le format',
+      });
+      if (!ok) return;
     }
+    await run(async () => {
+      must(
+        await sbClient
+          .from('screens_config')
+          .update(UNASSIGNED)
+          .eq('configuration_id', config.id)
+          .or(`pos_x.gte.${cols},pos_y.gte.${rows}`),
+      );
+      must(
+        await sbClient
+          .from('screens_config')
+          .update({ total_cols: cols, total_rows: rows })
+          .eq('configuration_id', config.id)
+          .lt('pos_x', cols)
+          .lt('pos_y', rows),
+      );
+      must(await sbClient.from('configurations').update({ format: nextFormat }).eq('id', config.id));
+    }, 'Format mis à jour');
   };
 
   const resetScreen = async (screenId: string) => {
-    await sbClient.from('screens_config')
-      .update({
-        configuration_id: null,
-        total_cols: 1,
-        total_rows: 1,
-        pos_x: 0,
-        pos_y: 0,
-        video_url: '',
-        audio_url: ''
-      })
-      .eq('id', screenId);
-  };
-
-  const openAssignModal = (configId: string, format: string, x: number, y: number, displayNum: number) => {
-    setAssignTarget({ configId, format, x, y, displayNum });
-    setShowAssignModal(true);
+    const ok = await confirm({ title: `Retirer ${screenId} ?`, confirmLabel: 'Retirer' });
+    if (ok) await run(async () => must(await sbClient.from('screens_config').update(UNASSIGNED).eq('id', screenId)), 'Écran retiré');
   };
 
   const submitAssign = async (screenId: string) => {
     if (!assignTarget) return;
     const { configId, format, x, y } = assignTarget;
-    const [rows, cols] = format.split('x').map(Number);
-    
-    setShowAssignModal(false);
+    const { rows, cols } = parseFormat(format);
     setAssignTarget(null);
-
-    await sbClient.from('screens_config')
-      .update({
-        configuration_id: configId,
-        pos_x: x,
-        pos_y: y,
-        total_cols: cols,
-        total_rows: rows
-      })
-      .eq('id', screenId);
+    await run(
+      async () =>
+        must(
+          await sbClient
+            .from('screens_config')
+            .update({ configuration_id: configId, pos_x: x, pos_y: y, total_cols: cols, total_rows: rows })
+            .eq('id', screenId),
+        ),
+      'Écran rattaché',
+    );
   };
 
-  const filterUnassigned = () => {
-    setCurrentFilter(prev => prev === 'unassigned' ? 'all' : 'unassigned');
+  /* ------------------------------ Propriétaires (admin) ------------------------------ */
+
+  const setScreenOwner = async (screenId: string, userId: string | null) => {
+    try {
+      const res = await sbClient.from('screens_config').update({ user_id: userId }).eq('id', screenId);
+      if (res.error) {
+        if (res.error.message.includes('user_id')) {
+          toast('Migration 20261110_screens_owner.sql manquante', 'error');
+          return;
+        }
+        throw res.error;
+      }
+      toast(userId ? 'Écran lié' : 'Écran délié');
+      onChanged();
+    } catch (err) {
+      toast(errorMessage(err), 'error');
+    }
   };
 
-  const filteredGroups = localGroups.filter(g =>
-    g && g.name && g.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const setGroupOwner = (groupId: string, userId: string | null) =>
+    run(
+      async () => must(await sbClient.from('groups').update({ user_id: userId }).eq('id', groupId)),
+      userId ? 'Restaurant lié' : 'Restaurant délié',
+    );
 
-  const unassignedScreens = localScreens.filter(s => s && !s.configuration_id);
+  /* ------------------------------ Grille de la configuration ------------------------------ */
 
-  let popupGridSlots: React.ReactNode[] = [];
-  let currentActiveConfig = selectedConfig ? localConfigurations.find(c => c.id === selectedConfig.id) || selectedConfig : null;
-  let screensInActiveConfig: AppScreen[] = currentActiveConfig ? localScreens.filter(s => s.configuration_id === currentActiveConfig?.id) : [];
-
-  if (selectedGroup && currentActiveConfig) {
-    const [rows, cols] = currentActiveConfig.format.split('x').map(Number);
-    let slotCounter = 1;
+  const renderConfigGrid = (config: Configuration) => {
+    const { rows, cols } = parseFormat(config.format);
+    const inConfig = screens.filter(s => s.configuration_id === config.id);
+    const slots = [];
+    let n = 1;
 
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < cols; x++) {
-        const currentSlot = slotCounter;
-        const matchedScreen = screensInActiveConfig.find(s => s.pos_x === x && s.pos_y === y);
-        const currentX = x;
-        const currentY = y;
+        const slot = n;
+        const s = inConfig.find(scr => scr.pos_x === x && scr.pos_y === y);
 
-        if (matchedScreen) {
-          const fileName = matchedScreen.video_url ? decodeURIComponent(matchedScreen.video_url.split('/').pop()?.split('?')[0] || '') : '';
-          const directVideoUrl = getAuthenticatedUrl(matchedScreen.video_url || '');
-
-          popupGridSlots.push(
-            <div key={matchedScreen.id} className="relative bg-slate-900 border border-white/10 rounded-2xl flex flex-col justify-between h-28 overflow-hidden group/slot">
-              {matchedScreen.video_url && directVideoUrl && (
+        if (s) {
+          const playlist = parsePlaylist(s.video_url);
+          const firstUrl = playlist[0] || '';
+          const previewUrl = transformStorageUrl(firstUrl);
+          slots.push(
+            <div key={s.id} className="relative flex h-32 flex-col overflow-hidden rounded-2xl bg-ink">
+              {previewUrl && (
                 <video
-                  key={directVideoUrl} 
-                  src={directVideoUrl}
+                  key={previewUrl}
+                  src={previewUrl}
                   muted
                   autoPlay
                   loop
                   playsInline
-                  preload="auto"
-                  className="absolute inset-0 w-full h-full object-cover opacity-0 transition-opacity duration-300 z-0 pointer-events-none"
-                  onLoadedData={(e) => {
-                    e.currentTarget.classList.remove('opacity-0');
-                    e.currentTarget.classList.add('opacity-45');
-                  }}
+                  preload="metadata"
+                  className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-500"
+                  onLoadedData={e => (e.currentTarget.style.opacity = '0.5')}
                 />
               )}
-              <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-black/70 z-10 pointer-events-none" />
-              <div className="z-20 p-2 flex flex-col justify-between h-full w-full">
-                <div className="flex justify-between items-center">
-                  <span className="text-[8px] font-black text-white/60 font-mono">POS {currentSlot}</span>
-                  <div className="flex items-center gap-1">
-                    {matchedScreen.video_url && <span className="text-[7px] font-black text-[#ff751f] bg-black/50 px-1 rounded font-mono tracking-wider">LIVE</span>}
-                    <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isScreenOnline(matchedScreen.last_ping) ? 'bg-[#34C759] pulse-green' : 'bg-white/20'}`}></div>
-                  </div>
+              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-black/60" />
+              <div className="relative z-10 flex h-full flex-col justify-between p-2.5">
+                <div className="flex items-start justify-between">
+                  <StatusDot online={online(s)} className="mt-1" />
+                  {isSuperAdmin && (
+                    <IconButton label={`Retirer ${s.id}`} variant="onDark" size="sm" onClick={() => resetScreen(s.id)}>
+                      <Unplug className="h-4 w-4" />
+                    </IconButton>
+                  )}
                 </div>
-                <div className="text-center my-0.5 min-w-0">
-                  <p className="font-black text-[10px] text-[#ff751f] truncate drop-shadow">{matchedScreen.id}</p>
-                  {fileName && <p className="text-[7px] text-white/50 font-medium truncate px-0.5 mt-0.5 font-mono">{fileName}</p>}
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-extrabold text-white">{s.id}</p>
+                  {firstUrl && (
+                    <p className="truncate text-xs text-white/65">
+                      {videoNameByUrl(firstUrl)}
+                      {playlist.length > 1 && ` +${playlist.length - 1}`}
+                    </p>
+                  )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => resetScreen(matchedScreen.id)}
-                  className="w-full text-center text-[8px] font-black text-white/80 bg-white/10 hover:bg-red-600/80 border border-white/5 py-1 rounded-lg transition-colors uppercase tracking-wider"
-                >
-                  Retirer
-                </button>
               </div>
-            </div>
+            </div>,
           );
         } else {
-          popupGridSlots.push(
-            <div
-              key={`empty-slot-${y}-${x}`}
-              onClick={() => openAssignModal(currentActiveConfig!.id, currentActiveConfig!.format, currentX, currentY, currentSlot)}
-              className="border border-dashed border-[#e3dad0] hover:border-[#ff751f]/30 bg-[#faf6f0]/30 hover:bg-[#faf6f0]/70 rounded-2xl flex flex-col items-center justify-center h-28 cursor-pointer text-[#7c6258] hover:text-[#ff751f] transition-all p-1 text-center"
+          slots.push(
+            <button
+              key={`empty-${y}-${x}`}
+              type="button"
+              disabled={!isSuperAdmin}
+              onClick={() => setAssignTarget({ configId: config.id, format: config.format, x, y, displayNum: slot })}
+              className={cn(
+                'flex h-32 flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-line bg-cream/60 text-center transition',
+                isSuperAdmin ? 'hover:border-brand/50 hover:bg-brand-50 active:scale-[0.98]' : 'cursor-default opacity-70',
+              )}
             >
-              <span className="text-[8px] font-bold text-[#7c6258]/60">POS {currentSlot}</span>
-              <span className="text-[9px] font-black text-[#ff751f] mt-0.5 whitespace-nowrap">+ Assigner</span>
-            </div>
+              {isSuperAdmin ? <Plus className="h-6 w-6 text-brand" aria-label="Assigner un écran" /> : <span className="text-sm font-bold text-muted/40">—</span>}
+            </button>,
           );
         }
-        slotCounter++;
+        n++;
       }
     }
+
+    return (
+      <div className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+        {slots}
+      </div>
+    );
+  };
+
+  /* ------------------------------ Vue « Tous les écrans » ------------------------------ */
+
+  const videoNameByUrl = (url: string) => library.videos.find(v => v.url === url)?.name || fileNameFromUrl(url) || 'Vidéo externe';
+
+  const renderAllScreens = () => {
+    const configById = new Map(configurations.map(c => [c.id, c]));
+    const groupById = new Map(groups.map(g => [g.id, g]));
+    const q = searchQuery.trim().toLowerCase();
+
+    const rows = screens
+      .map(s => {
+        const config = s.configuration_id ? configById.get(s.configuration_id) : undefined;
+        const group = config ? groupById.get(config.group_id) : undefined;
+        return { s, config, group, on: online(s) };
+      })
+      .filter(({ s, config, group, on }) => {
+        if (statusFilter === 'online' && !on) return false;
+        if (statusFilter === 'offline' && on) return false;
+        if (!q) return true;
+        return [s.id, config?.name, group?.name].some(v => v?.toLowerCase().includes(q));
+      })
+      .sort((a, b) => Number(b.on) - Number(a.on) || (a.group?.name || '~').localeCompare(b.group?.name || '~', 'fr') || a.s.id.localeCompare(b.s.id, 'fr'));
+
+    if (rows.length === 0) {
+      return <EmptyState icon={<MonitorPlay className="h-6 w-6" />} title="Aucun écran" text={q || statusFilter !== 'any' ? 'Aucun écran ne correspond à ces filtres.' : undefined} />;
+    }
+
+    return (
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {rows.map(({ s, config, group, on }) => {
+          const playlist = parsePlaylist(s.video_url);
+          const first = playlist[0];
+          const preview = first ? transformStorageUrl(first) : '';
+          const thumb = first ? library.videos.find(v => v.url === first)?.thumbnail || '' : '';
+
+          return (
+            <div key={s.id} className="card group flex flex-col overflow-hidden transition hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-lift">
+            <button
+              type="button"
+              onClick={() => {
+                if (config && group) {
+                  setSelectedGroupId(group.id);
+                  setSelectedConfigId(config.id);
+                } else if (isSuperAdmin) {
+                  setView('unassigned');
+                }
+              }}
+              className="block w-full text-left active:scale-[0.99]"
+            >
+              <div className="relative aspect-[16/7] bg-ink sm:aspect-video">
+                {thumb ? (
+                  <img src={thumb} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover opacity-85" />
+                ) : preview ? (
+                  <video
+                    src={`${preview}#t=0.5`}
+                    muted
+                    playsInline
+                    preload="metadata"
+                    className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-80"
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center text-white/25">
+                    <Monitor className="h-10 w-10" />
+                  </div>
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/40" />
+                <p className="absolute inset-x-3 bottom-2 flex items-center gap-2 text-base font-extrabold text-white drop-shadow">
+                  <StatusDot online={on} />
+                  <span className="truncate">{s.id}</span>
+                </p>
+              </div>
+
+              <div className="space-y-1 p-3.5">
+                {config && group ? (
+                  <p className="truncate text-sm font-bold text-ink">
+                    {group.name}
+                    <span className="font-medium text-muted"> · {config.name}</span>
+                  </p>
+                ) : (
+                  <Badge tone="neutral">En attente</Badge>
+                )}
+                <p className="flex items-center gap-1.5 truncate text-sm text-muted">
+                  <Film className="h-4 w-4 flex-shrink-0 text-brand" />
+                  {first ? (
+                    <span className="truncate">
+                      {videoNameByUrl(first)}
+                      {playlist.length > 1 && <span className="font-semibold"> +{playlist.length - 1}</span>}
+                    </span>
+                  ) : (
+                    <span>—</span>
+                  )}
+                </p>
+                {!on && <p className="text-xs text-muted/70">{timeAgo(s.last_ping, now)}</p>}
+              </div>
+            </button>
+            {isSuperAdmin && (
+              <div className="mt-auto border-t border-sand px-3.5 py-2.5">
+                <OwnerSelect accounts={accounts} value={s.user_id ?? null} onChange={id => setScreenOwner(s.id, id)} />
+              </div>
+            )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  /* ------------------------------ Page ------------------------------ */
+
+  if (loading && groups.length === 0) {
+    return (
+      <div className="flex justify-center py-16">
+        <Spinner />
+      </div>
+    );
   }
 
+  const groupConfigs = selectedGroup ? configurations.filter(c => c.group_id === selectedGroup.id) : [];
+
   return (
-    <div className="space-y-5 page-content w-full max-w-md mx-auto px-1 xl:relative xl:left-1/2 xl:-translate-x-1/2 xl:w-[85vw] xl:max-w-6xl xl:mx-0">
-      <div className="flex gap-2.5 items-center">
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Rechercher un restaurant..."
-          className="glass-input w-full min-w-0 rounded-2xl p-4 text-xs placeholder-[#e3dad0]/60 outline-none font-semibold shadow-inner focus:ring-1 focus:ring-[#ff751f]/10"
-        />
-        <button
-          onClick={toggleCreateForm}
-          className="px-5 py-4 bg-gradient-to-r from-[#ff751f] to-[#b74b1b] text-white rounded-2xl text-xs font-black shadow-md shadow-[#ff751f]/20 whitespace-nowrap btn-glow flex-shrink-0 flex items-center justify-center text-center"
+    <div className="space-y-5">
+      <PageTitle
+        title="Écrans"
+        actions={
+          isSuperAdmin && (
+            <IconButton label="Nouveau restaurant" variant="secondary" onClick={() => setShowCreateForm(v => !v)}>
+              <Plus className={cn('h-5 w-5 transition-transform', showCreateForm && 'rotate-45')} />
+            </IconButton>
+          )
+        }
+      />
+
+      {isSuperAdmin && showCreateForm && (
+        <form
+          className="card space-y-3 p-4 animate-in fade-in slide-in-from-top-2 duration-200"
+          onSubmit={e => {
+            e.preventDefault();
+            submitNewGroup();
+          }}
         >
-          + Restaurant
-        </button>
-      </div>
-
-      {showCreateForm && (
-        <div className="glass-card p-4 shadow-xl border border-[#f2ede4] bg-white/50 flex flex-col gap-3.5 animate-in fade-in duration-200 rounded-3xl">
-          <div className="flex items-center gap-2.5 w-full">
-            <label className="relative w-10 h-10 rounded-xl border border-dashed border-[#e3dad0] hover:border-[#ff751f]/40 bg-[#faf6f0] flex items-center justify-center cursor-pointer flex-shrink-0 overflow-hidden shadow-inner mt-1 transition-colors">
+          <div className="flex items-center gap-3">
+            <label
+              className="relative flex h-12 w-12 flex-shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-line bg-cream text-muted transition hover:border-brand/50"
+              title="Ajouter une photo"
+            >
               {uploadingImage ? (
-                <div className="w-3 h-3 border-2 border-[#e3dad0] border-t-[#ff751f] rounded-full animate-spin"></div>
+                <Spinner className="h-5 w-5" />
               ) : newGroupImageUrl ? (
-                <img src={newGroupImageUrl} className="w-full h-full object-cover" alt="" />
+                <img src={newGroupImageUrl} className="h-full w-full object-cover" alt="" />
               ) : (
-                <img src="/bibliotheque.svg" className="w-5 h-5 object-contain opacity-40" alt="" />
+                <ImagePlus className="h-5 w-5" />
               )}
-              <input type="file" accept="image/*" onChange={handleCreateImageUpload} className="hidden" />
+              <input type="file" accept="image/*" onChange={handleCreateImageUpload} className="sr-only" />
             </label>
-
-            <input
-              type="text"
-              value={newGroupName}
-              onChange={(e) => setNewGroupName(e.target.value)}
-              placeholder="Nom du nouveau restaurant parent"
-              className="flex-1 h-10 bg-white border border-[#e3dad0] rounded-xl p-3 text-xs text-[#b74b1b] placeholder-[#e3dad0] outline-none font-semibold shadow-inner"
-            />
+            <Input value={newGroupName} onChange={e => setNewGroupName(e.target.value)} placeholder="Nom" autoFocus />
           </div>
-          
           <div className="flex justify-end gap-2">
-            <button
-              onClick={toggleCreateForm}
-              className="px-4 py-1.5 text-xs font-bold text-[#7c6258] bg-[#faf6f0] hover:bg-[#e3dad0]/30 rounded-xl transition-all"
-            >
+            <Button variant="ghost" onClick={() => setShowCreateForm(false)}>
               Annuler
-            </button>
-            <button
-              onClick={submitNewGroup}
-              className="px-5 py-1.5 text-xs font-bold text-white bg-[#ff751f] hover:bg-[#b74b1b] rounded-xl shadow-md transition-all active:scale-95"
-            >
+            </Button>
+            <Button type="submit" loading={creating} disabled={!newGroupName.trim() || uploadingImage}>
               Enregistrer
-            </button>
+            </Button>
           </div>
-        </div>
+        </form>
       )}
 
-      <div className="flex justify-between items-center px-1">
-        <span className="text-[10px] font-bold text-[#7c6258] uppercase tracking-wider">Établissements actifs</span>
-        <button
-          onClick={filterUnassigned}
-          className={`btn-action px-3 py-2 rounded-full border shadow-md text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all flex-shrink-0 ${
-            currentFilter === 'unassigned'
-              ? "bg-[#ff751f]/10 border-[#ff751f]/30 text-[#ff751f] shadow-[#ff751f]/5"
-              : "bg-white border-[#e3dad0] text-[#7c6258] hover:text-[#ff751f]"
-          }`}
-        >
-          <span>En attente</span>
-          <span className="bg-[#faf6f0] border border-[#e3dad0] text-[#b74b1b] px-2 py-0.5 rounded-full text-[10px] font-black flex-shrink-0">
-            {unassignedScreens.length}
-          </span>
-        </button>
-      </div>
-
-      <div className="liveGridContainer">
-        {currentFilter === 'unassigned' ? (
-          unassignedScreens.length === 0 ? (
-            <div className="glass-card p-8 text-center text-xs text-[#7c6258] border border-dashed border-[#e3dad0]">
-              <p className="text-xs text-[#7c6258] font-medium">Aucun écran en attente.</p>
+      <div className="space-y-2.5">
+        <div className="no-scrollbar -mx-1 overflow-x-auto px-1">
+          <Segmented
+            value={view}
+            onChange={setView}
+            options={[
+              { value: 'restaurants', label: 'Restaurants' },
+              { value: 'all', label: 'Écrans' },
+              ...(isSuperAdmin
+                ? [{ value: 'unassigned' as const, label: unassignedScreens.length > 0 ? `En attente · ${unassignedScreens.length}` : 'En attente' }]
+                : []),
+            ]}
+          />
+        </div>
+        {view !== 'unassigned' && (
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="flex-1">
+              <Input
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Rechercher"
+                leading={<Search className="h-4.5 w-4.5" />}
+                aria-label="Rechercher"
+              />
             </div>
-          ) : (
-            <div className="glass-card p-5 space-y-3 shadow-xl rounded-2xl border border-[#e3dad0] bg-white/40">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {unassignedScreens.map(s => (
-                  <div key={s.id} className="flex items-center justify-between p-3 bg-[#faf6f0]/70 rounded-xl border border-[#e3dad0] gap-4">
-                    <div className="flex items-center gap-2 overflow-hidden min-w-0">
-                      <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isScreenOnline(s.last_ping) ? 'bg-[#34C759] pulse-green' : 'bg-[#7c6258]/50'}`}></div>
-                      <span className="font-bold text-xs text-[#b74b1b] truncate">{s.id}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => deleteScreen(s.id)}
-                      className="text-[9px] font-bold text-red-500 bg-red-500/5 px-2.5 py-1.5 rounded-lg border border-red-500/10 hover:bg-red-500 hover:text-white transition-colors"
-                    >
-                      Supprimer
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )
-        ) : filteredGroups.length === 0 ? (
-          <div className="glass-card p-8 text-center text-xs text-[#7c6258] border border-dashed border-[#e3dad0]">
-            <p className="text-xs text-[#7c6258] font-medium">Aucun restaurant trouvé.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-5">
-            {filteredGroups.map(group => {
-              const configsInGroup = localConfigurations.filter(c => c.group_id === group.id);
-              const configIds = configsInGroup.map(c => c.id);
-              const screensInGroup = localScreens.filter(s => s.configuration_id && configIds.includes(s.configuration_id));
-              
-              let groupOnlineCount = 0;
-              screensInGroup.forEach(s => {
-                if (s && isScreenOnline(s.last_ping)) groupOnlineCount++;
-              });
-
-              return (
-                <div
-                  key={group.id}
-                  onClick={() => {
-                    setSelectedGroup(group);
-                    setSelectedConfig(null); 
-                  }}
-                  className="relative border border-[#f2ede4] hover:border-[#ff751f]/50 rounded-3xl p-5 flex flex-col justify-between items-center text-center shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer select-none aspect-square w-full overflow-hidden bg-slate-100 group"
-                  style={group.image_url ? { backgroundImage: `url(${group.image_url})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}}
-                >
-                  <div className="absolute inset-0 bg-black/40 group-hover:bg-black/55 transition-colors z-0" />
-                  
-                  <div className="z-10 w-full flex-1 flex flex-col justify-center items-center text-center">
-                    <h3 className="text-sm sm:text-base font-black text-[#ff751f] uppercase tracking-wide text-center max-w-full break-words line-clamp-2 px-1 drop-shadow-[0_1.5px_2px_rgba(0,0,0,0.8)]">
-                      {group.name}
-                    </h3>
-                  </div>
-
-                  <div className="z-10 w-full flex justify-center items-center mt-1.5 pt-2 border-t border-white/15">
-                    <div className="flex items-center gap-1.5 bg-black/40 border border-white/10 px-3 py-1 rounded-xl shadow-sm">
-                      <span className="h-2 w-2 rounded-full bg-[#34C759] pulse-green"></span>
-                      <span className="text-xs font-black text-white font-mono tracking-tight">{groupOnlineCount}</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+            {view === 'all' && (
+              <Segmented
+                value={statusFilter}
+                onChange={setStatusFilter}
+                options={[
+                  { value: 'any', label: 'Tous' },
+                  { value: 'online', label: String(screens.filter(online).length), title: 'En ligne', icon: <StatusDot online className="h-2 w-2" /> },
+                  { value: 'offline', label: String(screens.filter(x => !online(x)).length), title: 'Hors ligne', icon: <StatusDot online={false} className="h-2 w-2" /> },
+                ]}
+              />
+            )}
           </div>
         )}
       </div>
 
-      {/* POPUP DE MULTI-CONFIGURATION DU RESTAURANT */}
-      {selectedGroup && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white border border-[#f2ede4] w-full max-w-md rounded-3xl p-5 space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto flex flex-col">
-            
-            <div className="flex justify-between items-center border-b border-[#faf6f0] pb-3 gap-2">
-              <div className="flex items-center gap-2 flex-1 min-w-0">
-                <label className="relative w-10 h-10 rounded-xl border border-dashed border-[#e3dad0] hover:border-[#ff751f]/40 bg-[#faf6f0] flex items-center justify-center cursor-pointer flex-shrink-0 overflow-hidden shadow-inner transition-colors">
-                  {uploadingImage ? (
-                    <div className="w-3 h-3 border-2 border-[#e3dad0] border-t-[#ff751f] rounded-full animate-spin"></div>
-                  ) : selectedGroup.image_url ? (
-                    <img src={selectedGroup.image_url} className="w-full h-full object-cover" alt="" />
-                  ) : (
-                    <img src="/bibliotheque.svg" className="w-5 h-5 object-contain opacity-40" alt="" />
-                  )}
-                  <input type="file" accept="image/*" disabled={uploadingImage} onChange={(e) => handlePopupImageChange(e, selectedGroup.id)} className="hidden" />
-                </label>
-                <h4 className="text-sm font-black text-[#b74b1b] uppercase truncate ml-1 flex-1">{selectedGroup.name}</h4>
-              </div>
+      {view === 'all' ? (
+        renderAllScreens()
+      ) : view === 'unassigned' && isSuperAdmin ? (
+        unassignedScreens.length === 0 ? (
+          <EmptyState icon={<Hourglass className="h-6 w-6" />} title="Aucun écran en attente" />
+        ) : (
+          <section className="card p-4">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {unassignedScreens.map(s => (
+                <div key={s.id} className="flex items-center gap-3 rounded-2xl border border-sand bg-cream/60 p-3">
+                  <StatusDot online={online(s)} />
+                  <span className="min-w-0 flex-1 truncate text-sm font-bold text-ink">{s.id}</span>
+                  <IconButton label={`Supprimer ${s.id}`} variant="danger" size="sm" onClick={() => deleteScreen(s.id)}>
+                    <Trash2 className="h-4 w-4" />
+                  </IconButton>
+                </div>
+              ))}
+            </div>
+          </section>
+        )
+      ) : filteredGroups.length === 0 ? (
+        <EmptyState icon={<Store className="h-6 w-6" />} title={searchQuery ? 'Aucun résultat' : 'Aucun restaurant'} />
+      ) : (
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+          {filteredGroups.map(group => {
+            const configIds = new Set(configurations.filter(c => c.group_id === group.id).map(c => c.id));
+            const inGroup = screens.filter(s => s.configuration_id && configIds.has(s.configuration_id));
+            const onlineCount = inGroup.filter(online).length;
+
+            return (
               <button
+                key={group.id}
                 type="button"
                 onClick={() => {
-                  setSelectedGroup(null);
-                  setSelectedConfig(null);
+                  setSelectedGroupId(group.id);
+                  setSelectedConfigId(null);
                 }}
-                className="bg-[#faf6f0] hover:bg-[#e3dad0]/40 text-[#7c6258] font-bold p-2 text-xs rounded-full transition-all flex-shrink-0"
+                className="group relative flex aspect-square w-full flex-col justify-end overflow-hidden rounded-3xl bg-gradient-to-br from-brand to-brand-800 p-4 text-left shadow-card transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lift active:scale-[0.98]"
               >
-                ✕
+                {group.image_url && (
+                  <img
+                    src={group.image_url}
+                    alt=""
+                    loading="lazy"
+                    className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                  />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/25 to-black/0" />
+                {!group.image_url && <Store className="absolute right-4 top-4 h-7 w-7 text-white/40" />}
+
+                <div className="relative z-10">
+                  <h3 className="line-clamp-2 text-base font-extrabold uppercase leading-tight text-white drop-shadow sm:text-lg">{group.name}</h3>
+                  <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-sm font-bold tabular-nums text-white backdrop-blur" title="En ligne">
+                    <StatusDot online={onlineCount > 0} className="h-2 w-2" />
+                    {onlineCount}
+                  </div>
+                </div>
               </button>
-            </div>
+            );
+          })}
+        </div>
+      )}
 
-            {!selectedConfig ? (
-              // EXÉCUTION VUE A : Liste des configurations associées
-              <div className="space-y-4 flex-1 flex flex-col min-h-0">
-                <div className="bg-[#faf6f0]/50 border border-[#e3dad0] p-3 rounded-2xl space-y-2">
-                  <div className="text-[10px] font-black text-[#b74b1b] uppercase tracking-wider">Nouvelle Configuration</div>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={newConfigName}
-                      onChange={(e) => setNewConfigName(e.target.value)}
-                      placeholder="Ex: Menu Midi, Écrans Soir..."
-                      className="flex-1 bg-white border border-[#e3dad0] rounded-xl px-3 text-xs font-semibold outline-none text-[#b74b1b] h-9"
-                    />
-                    
-                    <select
-                      value={newConfigFormat}
-                      onChange={(e) => setNewConfigFormat(e.target.value)}
-                      className="px-2 bg-white border border-[#e3dad0] rounded-xl text-xs font-bold text-[#b74b1b] outline-none"
-                    >
-                      <option value="1x1">1x1</option>
-                      <option value="1x2">1x2</option>
-                      <option value="1x3">1x3</option>
-                      <option value="1x4">1x4</option>
-                      <option value="2x2">2x2</option>
-                    </select>
-                    <button
-                      type="button"
-                      onClick={createNewConfiguration}
-                      className="bg-[#ff751f] hover:bg-[#b74b1b] text-white font-bold text-xs px-3 rounded-xl transition-all"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-
-                <div className="text-[10px] font-black text-[#7c6258] uppercase tracking-wider px-1">Configurations Disponibles :</div>
-                <div className="overflow-y-auto space-y-2 flex-1 pr-0.5">
-                  {localConfigurations.filter(c => c.group_id === selectedGroup.id).length === 0 ? (
-                    <p className="text-xs text-center text-[#7c6258] italic py-4">Aucune configuration créée pour le moment.</p>
-                  ) : (
-                    localConfigurations.filter(c => c.group_id === selectedGroup.id).map(config => {
-                      const screenCount = localScreens.filter(s => s.configuration_id === config.id).length;
-                      return (
-                        <div
-                          key={config.id}
-                          onClick={() => setSelectedConfig(config)}
-                          className="w-full bg-[#faf6f0]/60 hover:bg-[#ff751f]/5 p-3 rounded-2xl border border-[#e3dad0] hover:border-[#ff751f]/30 flex justify-between items-center transition-all cursor-pointer group/item"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <p className="font-bold text-xs text-[#b74b1b] truncate">{config.name}</p>
-                            <p className="text-[9px] font-mono font-bold text-[#ff751f] mt-0.5">{config.format} • {screenCount} dalle(s) attachée(s)</p>
-                          </div>
-                          
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={(e) => deleteConfiguration(config.id, e)}
-                              className="text-[10px] p-2 bg-white rounded-xl border border-[#e3dad0] text-red-500 hover:bg-red-500 hover:text-white sm:opacity-0 group-hover/item:opacity-100 transition-all shadow-sm"
-                            >
-                              🗑
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-
-                <div className="pt-2 border-t border-[#faf6f0] flex justify-start">
-                  <button
-                    type="button"
-                    onClick={(e) => deleteGroup(selectedGroup.id, e)}
-                    className="bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded-xl py-2 px-4 text-[10px] font-black uppercase tracking-wider transition-all border border-red-200/40"
-                  >
-                    Supprimer Restaurant
-                  </button>
-                </div>
-              </div>
-            ) : (
-              // EXÉCUTION VUE B : Gestion de la grille d'écrans de la configuration choisie
-              <div className="space-y-4 flex-1 flex flex-col min-h-0">
-                <div className="flex items-center justify-between bg-[#ff751f]/5 border border-[#ff751f]/20 p-2.5 rounded-xl gap-2">
-                  <div className="min-w-0 flex-1">
-                    <span className="text-[8px] font-black uppercase tracking-widest text-[#ff751f]">Config Active :</span>
-                    <p className="text-xs font-black text-[#b74b1b] truncate">{currentActiveConfig?.name}</p>
-                  </div>
-                  <div className="flex gap-1.5 items-center flex-shrink-0">
-                    <select
-                      value={currentActiveConfig?.format}
-                      onChange={(e) => changeConfigFormat(currentActiveConfig!.id, e.target.value)}
-                      className="px-2 h-8 bg-white border border-[#e3dad0] rounded-lg text-[11px] font-black text-[#b74b1b] font-mono outline-none"
-                    >
-                      <option value="1x1">1x1</option>
-                      <option value="1x2">1x2</option>
-                      <option value="1x3">1x3</option>
-                      <option value="1x4">1x4</option>
-                      <option value="2x2">2x2</option>
-                    </select>
-
-                    <button
-                      type="button"
-                      onClick={() => setSelectedConfig(null)}
-                      className="text-[10px] font-bold bg-white text-[#7c6258] px-2.5 h-8 rounded-lg border border-[#e3dad0]"
-                    >
-                      ⬅ CONFIGS
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto py-1">
-                  <div 
-                    className="grid gap-2" 
-                    style={{ gridTemplateColumns: `repeat(${currentActiveConfig?.format.split('x').map(Number)[1] || 1}, minmax(0, 1fr))` }}
-                  >
-                    {popupGridSlots}
-                  </div>
-                </div>
-
-                <div className="flex gap-2 pt-2 border-t border-[#faf6f0]">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedGroup(null);
-                      setSelectedConfig(null);
-                    }}
-                    className="w-full bg-[#faf6f0] text-[#7c6258] text-xs font-bold py-3.5 rounded-2xl transition-colors hover:bg-[#e3dad0]/40 mt-2"
-                  >
-                    Fermer la Matrice
-                  </button>
-                </div>
+      {/* ======================= MODALE RESTAURANT ======================= */}
+      <Modal
+        open={!!selectedGroup}
+        onClose={() => {
+          setSelectedGroupId(null);
+          setSelectedConfigId(null);
+        }}
+        size="lg"
+        title={selectedConfig ? selectedConfig.name : selectedGroup?.name}
+        subtitle={selectedConfig ? selectedGroup?.name : undefined}
+        leading={
+          selectedConfig ? (
+            <IconButton label="Retour aux configurations" variant="secondary" onClick={() => setSelectedConfigId(null)}>
+              <ChevronLeft className="h-5 w-5" />
+            </IconButton>
+          ) : (
+            selectedGroup && (
+              <label
+                className="relative flex h-11 w-11 flex-shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-line bg-cream text-muted transition hover:border-brand/50"
+                title="Changer la photo"
+              >
+                {uploadingImage ? (
+                  <Spinner className="h-5 w-5" />
+                ) : selectedGroup.image_url ? (
+                  <img src={selectedGroup.image_url} className="h-full w-full object-cover" alt="" />
+                ) : (
+                  <Camera className="h-5 w-5" />
+                )}
+                <input type="file" accept="image/*" disabled={uploadingImage} onChange={e => handleGroupImageChange(e, selectedGroup.id)} className="sr-only" />
+              </label>
+            )
+          )
+        }
+        footer={
+          !selectedConfig && isSuperAdmin && selectedGroup ? (
+            <Button variant="dangerSoft" size="sm" icon={<Trash2 className="h-4 w-4" />} onClick={() => deleteGroup(selectedGroup)}>
+              Supprimer le restaurant
+            </Button>
+          ) : undefined
+        }
+      >
+        {selectedGroup && !selectedConfig && (
+          <div className="space-y-4">
+            {isSuperAdmin && (
+              <div className="[&>label]:w-full [&_.relative]:flex-1">
+                <OwnerSelect accounts={accounts} value={selectedGroup.user_id ?? null} onChange={id => setGroupOwner(selectedGroup.id, id)} />
               </div>
             )}
+            {isSuperAdmin && (
+              <form
+                className="space-y-2 rounded-2xl border border-sand bg-cream/60 p-3"
+                onSubmit={e => {
+                  e.preventDefault();
+                  createNewConfiguration();
+                }}
+              >
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input value={newConfigName} onChange={e => setNewConfigName(e.target.value)} placeholder="Nouvelle configuration" className="h-11" />
+                  <div className="flex gap-2">
+                    <Select value={newConfigFormat} onChange={e => setNewConfigFormat(e.target.value)} aria-label="Format" className="w-28 [&_select]:h-11">
+                      {FORMATS.map(f => (
+                        <option key={f.value} value={f.value}>
+                          {f.value}
+                        </option>
+                      ))}
+                    </Select>
+                    <Button type="submit" disabled={!newConfigName.trim()} icon={<Plus className="h-5 w-5" />} className="h-11 w-11 px-0" aria-label="Créer" />
+                  </div>
+                </div>
+              </form>
+            )}
 
+            {groupConfigs.length === 0 ? (
+              <EmptyState icon={<LayoutGrid className="h-6 w-6" />} title="Aucune configuration" />
+            ) : (
+              <ul className="space-y-2">
+                {groupConfigs.map(config => {
+                  const inConfig = screens.filter(s => s.configuration_id === config.id);
+                  const onlineCount = inConfig.filter(online).length;
+                  const { rows, cols } = parseFormat(config.format);
+                  return (
+                    <li key={config.id} className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedConfigId(config.id)}
+                        className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-line bg-white p-3 text-left transition hover:border-brand/40 hover:bg-brand-50/40 active:scale-[0.99]"
+                      >
+                        <span
+                          className="grid h-10 w-10 flex-shrink-0 gap-0.5 rounded-xl bg-brand-50 p-1.5"
+                          style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}
+                          aria-hidden
+                        >
+                          {Array.from({ length: rows * cols }).map((_, i) => (
+                            <span key={i} className="rounded-[3px] bg-brand/70" />
+                          ))}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[15px] font-bold text-ink">{config.name}</span>
+                        </span>
+                        <span className="flex items-center gap-1.5 text-sm font-bold tabular-nums text-ink" title="En ligne">
+                          <StatusDot online={onlineCount > 0} className="h-2 w-2" />
+                          {onlineCount}
+                        </span>
+                        <ChevronRight className="h-5 w-5 flex-shrink-0 text-muted" />
+                      </button>
+                      {isSuperAdmin && (
+                        <IconButton label={`Supprimer ${config.name}`} variant="danger" onClick={() => deleteConfiguration(config)}>
+                          <Trash2 className="h-4.5 w-4.5" />
+                        </IconButton>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* MODAL ASSIGNATION TELEVISION */}
-      {showAssignModal && assignTarget && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="bg-white border border-[#f2ede4] w-full max-w-xs rounded-3xl p-4 space-y-4 shadow-2xl">
-            <div className="text-[10px] font-black text-[#b74b1b] uppercase tracking-wider text-center border-b pb-2">
-              Associer une TV au Slot {assignTarget.displayNum}
-            </div>
-            <div className="space-y-1.5 max-h-[35vh] overflow-y-auto pr-0.5">
-              {unassignedScreens.length === 0 ? (
-                <p className="text-[10px] text-center text-[#7c6258] py-4 italic">Aucune TV disponible en attente.</p>
+        {selectedGroup && selectedConfig && (
+          <div className="space-y-4">
+            <div className="flex justify-end">
+              {isSuperAdmin ? (
+                <Select
+                  value={selectedConfig.format}
+                  onChange={e => changeConfigFormat(selectedConfig, e.target.value)}
+                  aria-label="Format de la grille"
+                  className="w-28 [&_select]:h-10"
+                >
+                  {FORMATS.map(f => (
+                    <option key={f.value} value={f.value}>
+                      {f.value}
+                    </option>
+                  ))}
+                </Select>
               ) : (
-                unassignedScreens.map(s => (
-                  <button
-                    key={s.id}
-                    onClick={() => submitAssign(s.id)}
-                    className="w-full bg-[#faf6f0]/80 hover:bg-[#ff751f]/10 p-3 rounded-xl border border-[#e3dad0] hover:border-[#ff751f]/35 font-bold text-xs text-[#b74b1b] transition-all flex justify-between items-center"
-                  >
-                    <span className="truncate">{s.id}</span>
-                    <span className="text-[#ff751f] font-black text-xs">Rattacher +</span>
-                  </button>
-                ))
+                <Badge>{selectedConfig.format}</Badge>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setShowAssignModal(false);
-                setAssignTarget(null);
-              }}
-              className="w-full bg-[#faf6f0] text-[#7c6258] text-[10px] font-black py-2.5 rounded-xl hover:bg-[#e3dad0]/40 transition-colors uppercase tracking-wider"
-            >
-              Retour
-            </button>
+            {renderConfigGrid(selectedConfig)}
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
+
+      {/* ======================= MODALE ASSIGNATION ======================= */}
+      <Modal
+        open={!!assignTarget && isSuperAdmin}
+        onClose={() => setAssignTarget(null)}
+        size="sm"
+        z="z-[60]"
+        title={`Position ${assignTarget?.displayNum ?? ''}`}
+      >
+        {unassignedScreens.length === 0 ? (
+          <EmptyState icon={<Hourglass className="h-6 w-6" />} title="Aucun écran disponible" />
+        ) : (
+          <div className="space-y-2">
+            {unassignedScreens.map(s => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => submitAssign(s.id)}
+                className="flex w-full items-center gap-3 rounded-2xl border border-line bg-white p-3.5 text-left transition hover:border-brand/40 hover:bg-brand-50/40 active:scale-[0.99]"
+              >
+                <StatusDot online={online(s)} />
+                <span className="min-w-0 flex-1 truncate text-sm font-bold text-ink">{s.id}</span>
+                <Plus className="h-5 w-5 text-brand" aria-hidden />
+              </button>
+            ))}
+          </div>
+        )}
+      </Modal>
     </div>
+  );
+}
+
+/** Choix du compte propriétaire (admin). */
+function OwnerSelect({ accounts, value, onChange }: { accounts: Profile[]; value: string | null; onChange: (id: string | null) => void }) {
+  const known = !value || accounts.some(a => a.id === value);
+  return (
+    <label className="flex min-w-0 items-center gap-2">
+      <UserRound className="h-4 w-4 flex-shrink-0 text-muted" aria-hidden />
+      <span className="sr-only">Compte propriétaire</span>
+      <Select
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value || null)}
+        className="min-w-0 flex-1 sm:w-56 sm:flex-none [&_select]:h-10 [&_select]:text-sm"
+      >
+        <option value="">Aucun compte</option>
+        {!known && value && <option value={value}>Compte inconnu</option>}
+        {accounts.map(a => (
+          <option key={a.id} value={a.id}>
+            {a.email || a.id}
+            {a.role === 'admin' ? ' (admin)' : ''}
+          </option>
+        ))}
+      </Select>
+    </label>
   );
 }

@@ -1,176 +1,271 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { sbClient } from './lib/supabase';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import type { User } from '@supabase/supabase-js';
+import { AlertCircle, Clapperboard, Stethoscope, Eye, EyeOff, Lock, LogOut, Mail, Monitor, MonitorPlay, RotateCcw, ShieldCheck, Store, X } from 'lucide-react';
+import { sbAuth } from './lib/supabase';
+import { useFleetData, useNow } from './lib/data';
+import { isOnline } from './lib/media';
+import type { GroupMode } from './lib/types';
 import Broadcast from './components/Broadcast';
 import Screens from './components/Screens';
 import Videos from './components/Videos';
+import Maintenance from './components/Maintenance';
+import { diagnose } from './lib/diagnostics';
+import Splash from './components/Splash';
+import KroustyLogo from './components/KroustyLogo';
+import { Button, FeedbackProvider, IconButton, Input, cn, useFeedback } from './components/ui';
 
-// 1. TYPAGE CORRIGÉ POUR ÉVITER LA COLLISION AVEC L'INTERFACE SCREEN DU NAVIGATEUR
-export interface AppScreen {
-  id: string;
-  configuration_id: string | null; // Aligné avec la structure de la table de dalles
-  last_ping: string | null;
-  pos_x: number;
-  pos_y: number;
-  total_cols: number;
-  total_rows: number;
-  video_url: string | null;
-  audio_url: string | null; 
-}
+export type { AppScreen } from './lib/types';
 
-interface Group {
-  id: string;
-  name: string;
-  image_url: string | null; 
-}
+type Tab = 'accueil' | 'appareils' | 'bibliotheque' | 'maintenance';
+
+const SPLASH_MIN_MS = 3300;
+const SPLASH_FADE_MS = 550;
+const TAB_STORAGE_KEY = 'krousty.tab';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'accueil' | 'appareils' | 'bibliotheque'>('appareils');
-  const [availableScreens, setAvailableScreens] = useState<AppScreen[]>([]);
-  const [availableGroups, setAvailableGroups] = useState<Group[]>([]);
-  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
+  return (
+    <FeedbackProvider>
+      <Root />
+    </FeedbackProvider>
+  );
+}
 
-  const [attributionInputs, setAttributionInputs] = useState<Record<string, string>>({});
-  const [groupModes, setGroupModes] = useState<Record<string, 'global' | 'per-screen'>>({});
+function Root() {
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [minSplashDone, setMinSplashDone] = useState(false);
+  const [splashPhase, setSplashPhase] = useState<'visible' | 'leaving' | 'gone'>('visible');
 
-  const [playingFile, setPlayingFile] = useState<any | null>(null);
-  const [playingVideoSrc, setPlayingVideoSrc] = useState<string>('');
-  const [playbackLoading, setPlaybackLoading] = useState(false);
-  const downloadCancelRef = useRef<boolean>(false);
-
-  const now = new Date().getTime();
-
-  const totalScreens = availableScreens.length;
-  
-  // 2. ADAPTATION DU CALCUL EN LIGNE : Seuil de tolérance fixé à 12 minutes (720s)
-  const onlineScreens = availableScreens.filter(s => {
-    if (!s.last_ping) return false;
-    return (now - new Date(s.last_ping).getTime()) / 1000 < 720;
-  }).length;
-
+  // Session utilisateur
   useEffect(() => {
-    let screensChannel: any;
-    let groupsChannel: any;
-
-    const initData = async () => {
-      const { data: g } = await sbClient.from('groups').select('*');
-      const { data: s } = await sbClient.from('screens_config').select('*');
-      
-      setAvailableGroups(g || []);
-      setAvailableScreens(s || []);
-
-      if (g) {
-        const folders: Record<string, boolean> = {};
-        g.forEach(group => {
-          folders[group.name] = false;
-        });
-        setOpenFolders(folders);
-      }
-    };
-
-    initData();
-
-    screensChannel = sbClient.channel('screens_realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'screens_config' }, (payload) => {
-        const { eventType, new: n, old: o } = payload;
-        if (eventType === 'DELETE') {
-          setAvailableScreens(prev => prev.filter(s => s.id !== o.id));
-        } else if (eventType === 'INSERT') {
-          setAvailableScreens(prev => [...prev, n as AppScreen]);
-        } else {
-          setAvailableScreens(prev => {
-            const idx = prev.findIndex(s => s.id === n.id);
-            if (idx !== -1) {
-              const updated = [...prev];
-              updated[idx] = n as AppScreen;
-              return updated;
-            }
-            return prev;
-          });
-        }
-      })
-      .subscribe();
-
-    groupsChannel = sbClient.channel('groups_realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'groups' }, (payload) => {
-        const { eventType, new: n, old: o } = payload;
-        if (eventType === 'DELETE') {
-          setAvailableGroups(prev => prev.filter(g => g.id !== o.id));
-        } else if (eventType === 'INSERT') {
-          setAvailableGroups(prev => [...prev, n as Group]);
-          setOpenFolders(prev => ({ ...prev, [(n as Group).name]: false }));
-        } else {
-          setAvailableGroups(prev => {
-            const idx = prev.findIndex(g => g.id === n.id);
-            if (idx !== -1) {
-              const updated = [...prev];
-              updated[idx] = n as Group;
-              return updated;
-            }
-            return prev;
-          });
-        }
-      })
-      .subscribe();
-
-    return () => {
-      if (screensChannel) sbClient.removeChannel(screensChannel);
-      if (groupsChannel) sbClient.removeChannel(groupsChannel);
-    };
+    sbAuth.auth.getSession().then(({ data: { session } }) => {
+      setCurrentUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+    const { data } = sbAuth.auth.onAuthStateChange((_event, session) => {
+      setCurrentUser(session?.user ?? null);
+    });
+    return () => data.subscription.unsubscribe();
   }, []);
 
-  const handlePlayVideo = (megaUrl: string) => {
-    setPlayingFile(true);
-    setPlayingVideoSrc(megaUrl);
-    setPlaybackLoading(false);
+  // Splash : durée minimale pour laisser l'animation se jouer, puis fondu.
+  useEffect(() => {
+    const t = setTimeout(() => setMinSplashDone(true), SPLASH_MIN_MS);
+    return () => clearTimeout(t);
+  }, []);
+
+  useEffect(() => {
+    if (splashPhase === 'visible' && minSplashDone && !authLoading) setSplashPhase('leaving');
+  }, [minSplashDone, authLoading, splashPhase]);
+
+  useEffect(() => {
+    if (splashPhase !== 'leaving') return;
+    const t = setTimeout(() => setSplashPhase('gone'), SPLASH_FADE_MS);
+    return () => clearTimeout(t);
+  }, [splashPhase]);
+
+  return (
+    <>
+      {!authLoading && (currentUser ? <Main key={currentUser.id} user={currentUser} /> : <Login onLogged={setCurrentUser} />)}
+      {splashPhase !== 'gone' && <Splash leaving={splashPhase === 'leaving'} />}
+    </>
+  );
+}
+
+/* ================================ CONNEXION ================================ */
+
+function Login({ onLogged }: { onLogged: (u: User) => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async (e: FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    const { data, error } = await sbAuth.auth.signInWithPassword({ email: email.trim(), password });
+    if (error) {
+      setError(error.message === 'Invalid login credentials' ? 'Identifiants incorrects' : error.message);
+    } else if (data.user) {
+      onLogged(data.user);
+    }
+    setLoading(false);
   };
 
-  const handleCloseVideo = () => {
-    downloadCancelRef.current = true;
-    setPlayingFile(null);
-    setPlayingVideoSrc('');
-    setPlaybackLoading(false);
+  return (
+    <div className="flex min-h-[100dvh] flex-col items-center justify-center px-4 py-10">
+      <div className="w-full max-w-sm overflow-hidden rounded-[32px] border border-sand bg-white shadow-lift animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="relative bg-brand-logo px-8 pb-9 pt-8">
+          <KroustyLogo className="mx-auto w-full max-w-[230px]" />
+          <Wave className="absolute inset-x-0 -bottom-px h-4 w-full" fill="#ffffff" />
+        </div>
+
+        <form onSubmit={handleLogin} className="space-y-4 px-7 pb-8 pt-5">
+          <div>
+            <Input
+              id="email"
+              type="email"
+              required
+              autoComplete="email"
+              inputMode="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="Email"
+              aria-label="Email"
+              leading={<Mail className="h-4.5 w-4.5" />}
+            />
+          </div>
+
+          <div>
+            <div className="relative">
+              <Input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                required
+                autoComplete="current-password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Mot de passe"
+                aria-label="Mot de passe"
+                className="pr-12"
+                leading={<Lock className="h-4.5 w-4.5" />}
+              />
+              <IconButton
+                label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                size="sm"
+                className="absolute right-2 top-1/2 -translate-y-1/2"
+                onClick={() => setShowPassword(v => !v)}
+              >
+                {showPassword ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
+              </IconButton>
+            </div>
+          </div>
+
+          {error && (
+            <div className="flex items-center gap-2 rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 animate-in fade-in" role="alert">
+              <AlertCircle className="h-4.5 w-4.5 flex-shrink-0" />
+              {error}
+            </div>
+          )}
+
+          <Button type="submit" size="lg" block loading={loading} className="mt-2">
+            Connexion
+          </Button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ============================== APPLICATION ============================== */
+
+export function Main({ user }: { user: User }) {
+  const { confirm } = useFeedback();
+  const fleet = useFleetData(user);
+  const now = useNow(15000);
+
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    try {
+      const saved = localStorage.getItem(TAB_STORAGE_KEY);
+      if (saved === 'accueil' || saved === 'appareils' || saved === 'bibliotheque' || saved === 'maintenance') return saved;
+    } catch {
+      /* stockage indisponible */
+    }
+    return 'appareils';
+  });
+
+  // État conservé entre les onglets (saisies du module de diffusion).
+  const [attributionInputs, setAttributionInputs] = useState<Record<string, string>>({});
+  const [groupModes, setGroupModes] = useState<Record<string, GroupMode>>({});
+  const [playingVideoSrc, setPlayingVideoSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TAB_STORAGE_KEY, activeTab);
+    } catch {
+      /* stockage indisponible */
+    }
+    window.scrollTo({ top: 0 });
+  }, [activeTab]);
+
+  const totalScreens = fleet.screens.length;
+  // Pastille rouge sur l'onglet Maintenance quand un problème critique est détecté (hors test des vidéos).
+  const criticalCount = fleet.isSuperAdmin
+    ? diagnose({ screens: fleet.screens, configurations: fleet.configurations, groups: fleet.groups, videos: [], media: {}, now }).filter(i => i.severity === 'critical').length
+    : 0;
+  // Un compte non admin ne doit jamais rester sur l'onglet Maintenance.
+  const tab: Tab = activeTab === 'maintenance' && !fleet.isSuperAdmin ? 'appareils' : activeTab;
+  const onlineScreens = fleet.screens.filter(s => isOnline(s.last_ping, now)).length;
+
+  const handleLogout = async () => {
+    const ok = await confirm({ title: 'Se déconnecter ?', confirmLabel: 'Déconnexion' });
+    if (ok) await sbAuth.auth.signOut();
   };
 
-  const hardRefresh = () => {
-    if ('caches' in window) {
-      caches.keys().then(keys => {
-        Promise.all(keys.map(key => caches.delete(key))).then(() => {
-          (window as Window).location.reload();
-        });
-      });
-    } else {
-      (window as Window).location.reload();
+  const hardRefresh = async () => {
+    const ok = await confirm({
+      title: "Réinitialiser l'application ?",
+      confirmLabel: 'Réinitialiser',
+    });
+    if (!ok) return;
+    try {
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+    } finally {
+      window.location.reload();
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#faf6f0] text-[#b74b1b] antialiased relative flex flex-col">
-      
-      <header className="w-full bg-[#ff751f] pt-4.5 pb-5 px-6 flex-shrink-0 relative">
-        <div className="max-w-xl mx-auto flex flex-col items-center relative z-10">
-          <img src="/logo.png" className="h-16 md:h-20 object-contain" alt="Krousty Control" />
-          <p id="globalStatus" className="text-[10px] font-black text-white/90 mt-1.5 flex items-center gap-1.5 uppercase tracking-widest">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 pulse-green"></span>
-            {onlineScreens} connecté(s) • {totalScreens} au total
-          </p>
+    <div className="relative flex min-h-[100dvh] flex-col">
+      <header className="relative z-10 flex-shrink-0 bg-brand-logo px-5 pb-6 pt-[max(1rem,env(safe-area-inset-top))]">
+        <div className="relative mx-auto flex max-w-xl flex-col items-center">
+          <button
+            type="button"
+            onClick={handleLogout}
+            aria-label="Se déconnecter"
+            title="Se déconnecter"
+            className="absolute right-0 top-1 inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/15 text-white transition hover:bg-black/25 active:scale-95"
+          >
+            <LogOut className="h-4.5 w-4.5" />
+          </button>
+
+          <KroustyLogo className="w-[170px] md:w-[210px]" />
+
+          <div className="mt-2 inline-flex items-center gap-3 rounded-full bg-black/15 px-3.5 py-1.5 text-sm font-bold tabular-nums text-white">
+            <span className="inline-flex items-center gap-1.5" title="En ligne">
+              <span className={cn('h-2 w-2 rounded-full', onlineScreens > 0 ? 'bg-emerald-300 pulse-online' : 'bg-white/50')} />
+              {onlineScreens}
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-white/75" title="Écrans">
+              <Monitor className="h-4 w-4" />
+              {totalScreens}
+            </span>
+            {fleet.isSuperAdmin && <ShieldCheck className="h-4 w-4 text-white/90" aria-label="Admin" />}
+          </div>
         </div>
 
-        <div className="absolute bottom-0 left-0 w-full overflow-hidden leading-[0] translate-y-[99%] z-10 pointer-events-none">
-          <svg viewBox="0 0 1200 120" preserveAspectRatio="none" className="relative block w-full h-[16px]">
-            <polygon points="0,0 1200,0 1200,95 0,120" fill="#b74b1b" />
-            <polygon points="0,0 1200,0 1200,75 0,105" fill="#ff751f" />
-          </svg>
-        </div>
+        <Wave className="pointer-events-none absolute inset-x-0 bottom-0 h-4 w-full translate-y-[99%]" />
       </header>
 
-      {/* 3. OUVERTURE DES PORTES DU CONTENEUR : max-w-xl passe à max-w-7xl sur grand écran PC */}
-      <main className="flex-1 w-full max-w-md md:max-w-4xl xl:max-w-7xl mx-auto px-4 pt-6 pb-24 space-y-6">
-        <div className="transition-all duration-300 ease-in-out">
-          {activeTab === 'accueil' && (
+      <main className="mx-auto w-full max-w-md flex-1 px-4 pb-36 pt-8 md:max-w-4xl xl:max-w-6xl">
+        <div key={activeTab} className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+          {tab === 'accueil' && (
             <Broadcast
-              availableScreens={availableScreens}
-              availableGroups={availableGroups}
-              sbClient={sbClient}
+              groups={fleet.groups}
+              configurations={fleet.configurations}
+              screens={fleet.screens}
+              isSuperAdmin={fleet.isSuperAdmin}
+              loading={fleet.loading}
+              onSaved={fleet.refresh}
               attributionInputs={attributionInputs}
               setAttributionInputs={setAttributionInputs}
               groupModes={groupModes}
@@ -178,105 +273,119 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'appareils' && (
+          {tab === 'appareils' && (
             <Screens
-              availableScreens={availableScreens}
-              availableGroups={availableGroups}
-              sbClient={sbClient}
-              openFolders={openFolders}
-              setOpenFolders={setOpenFolders}
+              groups={fleet.groups}
+              configurations={fleet.configurations}
+              screens={fleet.screens}
+              isSuperAdmin={fleet.isSuperAdmin}
+              loading={fleet.loading}
+              onChanged={fleet.refresh}
+              now={now}
             />
           )}
 
-          {activeTab === 'bibliotheque' && (
-            <Videos onPlayVideo={handlePlayVideo} />
+          {tab === 'bibliotheque' && <Videos isSuperAdmin={fleet.isSuperAdmin} onPlayVideo={setPlayingVideoSrc} screens={fleet.screens} />}
+
+          {tab === 'maintenance' && (
+            <Maintenance groups={fleet.groups} configurations={fleet.configurations} screens={fleet.screens} onChanged={fleet.refresh} />
           )}
         </div>
 
-        <footer className="pt-6 opacity-30 text-center">
+        <footer className="pt-10 text-center">
           <button
             type="button"
             onClick={hardRefresh}
-            className="w-full text-center text-[10px] font-bold text-slate-500 hover:text-slate-300 transition-colors uppercase tracking-widest"
+            aria-label="Réinitialiser l'application"
+            title="Réinitialiser l'application"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full text-muted/50 transition hover:bg-sand hover:text-muted"
           >
-            Réinitialiser l'application
+            <RotateCcw className="h-4 w-4" />
           </button>
         </footer>
       </main>
 
-      <nav className="fixed bottom-5 left-1/2 -translate-x-1/2 w-[90%] max-w-md bg-white/90 backdrop-blur-2xl border border-[#e3dad0] flex justify-around items-center py-2.5 px-3 z-40 shadow-2xl rounded-full shadow-[#b74b1b]/10">
-        <button
-          type="button"
-          onClick={() => setActiveTab('accueil')}
-          className={`flex flex-col items-center gap-1 transition-all py-1.5 px-4 rounded-full ${
-            activeTab === 'accueil' 
-              ? 'text-[#ff751f] font-extrabold bg-[#ff751f]/10 border border-[#ff751f]/20 shadow-lg shadow-[#ff751f]/5' 
-              : 'text-[#7c6258] hover:text-[#ff751f]'
-          }`}
-        >
-          <svg className="w-4.5 h-4.5" viewBox="0 0 236 176" fill="currentColor">
-            <g transform="translate(0.000000,176.000000) scale(0.100000,-0.100000)" stroke="none">
-              <path d="M122 1638 c-16 -16 -16 -110 0 -126 17 -17 2119 -17 2136 0 16 16 16 110 0 126 -17 17 -2119 17 -2136 0z"/>
-              <path d="M383 1423 l-173 -3 0 -625 0 -625 -65 0 -65 0 0 -70 0 -70 1105 0 1106 0 -3 68 -3 67 -62 3 -63 3 0 629 0 630 -802 -2 c-442 -1 -881 -4 -975 -5z m787 -938 l0 -305 -215 0 -215 0 0 305 0 305 215 0 215 0 0 -305z m460 0 l0 -305 -205 0 -205 0 0 305 0 305 205 0 205 0 0 -305z"/>
-              <path d="M1090 540 c0 -29 4 -40 15 -40 11 0 15 11 15 40 0 29 -4 40 -15 40 -11 0 -15 -11 -15 -40z"/>
-              <path d="M1270 540 c0 -29 4 -40 15 -40 11 0 15 11 15 40 0 29 -4 40 -15 40 -11 0 -15 -11 -15 -40z"/>
-            </g>
-          </svg>
-          <span className="text-[9px] font-extrabold tracking-wider uppercase">Accueil</span>
-        </button>
-        
-        <button
-          type="button"
-          onClick={() => setActiveTab('appareils')}
-          className={`flex flex-col items-center gap-1 transition-all py-1.5 px-4 rounded-full ${
-            activeTab === 'appareils' 
-              ? 'text-[#ff751f] font-extrabold bg-[#ff751f]/10 border border-[#ff751f]/20 shadow-lg shadow-[#ff751f]/5' 
-              : 'text-[#7c6258] hover:text-[#ff751f]'
-          }`}
-        >
-          <svg className="w-4.5 h-4.5" viewBox="0 0 24 24" fill="none">
-            <path d="M21 3H3C1.9 3 1 3.9 1 5V17C1 18.1 1.9 19 3 19H8V21H16V19H21C22.1 19 22.99 18.1 22.99 17L23 5C23 3.9 22.1 3 21 3ZM21 17H3V5H21V17Z" fill="currentColor"></path>
-          </svg>
-          <span className="text-[9px] font-extrabold tracking-wider uppercase">Écrans</span>
-        </button>
-        
-        <button
-          type="button"
-          onClick={() => setActiveTab('bibliotheque')}
-          className={`flex flex-col items-center gap-1 transition-all py-1.5 px-4 rounded-full ${
-            activeTab === 'bibliotheque' 
-              ? 'text-[#ff751f] font-extrabold bg-[#ff751f]/10 border border-[#ff751f]/20 shadow-lg shadow-[#ff751f]/5' 
-              : 'text-[#7c6258] hover:text-[#ff751f]'
-          }`}
-        >
-          <svg className="w-4.5 h-4.5" viewBox="0 0 24 24" fill="none">
-            <path d="M22 16V4C22 2.9 21.1 2 20 2H8C6.9 2 6 2.9 6 4V16C6 17.1 6.9 18 8 18H20C21.1 18 22 17.1 22 16ZM11 12L13.03 14.71L16 11L20 16H8L11 12ZM3 6C2.44772 6 2 6.44772 2 7V20C2 21.1 2.9 22 4 22H17C17.5523 22 18 21.5523 18 21V21C18 20.4477 17.5523 20 17 20H4V7C4 6.44772 3.55228 6 3 6V6Z" fill="currentColor"></path>
-          </svg>
-          <span className="text-[9px] font-extrabold tracking-wider uppercase">Vidéos</span>
-        </button>
+      <nav
+        className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center justify-around gap-1 rounded-full border border-line bg-white/90 p-1.5 shadow-lift backdrop-blur-xl"
+        aria-label="Navigation principale"
+      >
+        <NavButton active={tab === 'accueil'} onClick={() => setActiveTab('accueil')} icon={<Store className="h-5 w-5" />} label="Accueil" />
+        <NavButton active={tab === 'appareils'} onClick={() => setActiveTab('appareils')} icon={<MonitorPlay className="h-5 w-5" />} label="Écrans" />
+        <NavButton active={tab === 'bibliotheque'} onClick={() => setActiveTab('bibliotheque')} icon={<Clapperboard className="h-5 w-5" />} label="Vidéos" />
+        {fleet.isSuperAdmin && (
+          <NavButton
+            active={tab === 'maintenance'}
+            onClick={() => setActiveTab('maintenance')}
+            icon={<Stethoscope className="h-5 w-5" />}
+            label="Maintenance"
+            alert={criticalCount > 0}
+          />
+        )}
       </nav>
 
-      {playingFile && (
-        <div id="videoFullscreenModal" className="fixed inset-0 bg-black/95 backdrop-blur-md z-50 flex flex-col items-center justify-center p-4">
-          <button
-            type="button"
-            onClick={handleCloseVideo}
-            className="absolute top-6 right-6 z-50 bg-white/5 hover:bg-white/10 text-white px-5 py-2.5 rounded-full border border-white/10 backdrop-blur-md transition-all text-xs font-extrabold tracking-widest active:scale-95"
-          >
-            ✕ RETOUR
-          </button>
-          {playingVideoSrc && (
-            <video
-              id="fullVideoElement"
-              className="w-full h-full max-w-5xl max-h-[85vh] rounded-2xl shadow-2xl object-contain outline-none"
-              src={playingVideoSrc}
-              controls
-              autoPlay
-              playsInline
-            />
-          )}
-        </div>
-      )}
+      {playingVideoSrc && <VideoPlayer src={playingVideoSrc} onClose={() => setPlayingVideoSrc(null)} />}
     </div>
+  );
+}
+
+function NavButton({ active, onClick, icon, label, alert }: { active: boolean; onClick: () => void; icon: ReactNode; label: string; alert?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-full py-2 transition-all duration-200 active:scale-95',
+        active ? 'bg-brand text-white shadow-brand' : 'text-muted hover:bg-sand hover:text-ink',
+      )}
+    >
+      <span className="relative">
+        {icon}
+        {alert && <span className="absolute -right-1.5 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" aria-label="Problèmes critiques" />}
+      </span>
+      <span className="max-w-full truncate px-1 text-[11px] font-extrabold tracking-wide">{label}</span>
+    </button>
+  );
+}
+
+function VideoPlayer({ src, onClose }: { src: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    document.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-black/95 p-4 backdrop-blur-md animate-in fade-in duration-200" role="dialog" aria-modal="true">
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute right-4 top-[max(1rem,env(safe-area-inset-top))] z-10 inline-flex h-11 items-center gap-2 rounded-full border border-white/15 bg-white/10 px-5 text-sm font-bold text-white backdrop-blur transition hover:bg-white/20 active:scale-95"
+      >
+        <X className="h-4.5 w-4.5" />
+        Fermer
+      </button>
+      <video className="max-h-[85dvh] w-full max-w-5xl rounded-2xl object-contain shadow-2xl outline-none" src={src} controls autoPlay playsInline />
+    </div>
+  );
+}
+
+function Wave({ className, fill }: { className?: string; fill?: string }) {
+  return (
+    <svg viewBox="0 0 1200 120" preserveAspectRatio="none" className={className} aria-hidden>
+      {fill ? (
+        <path d="M0,120 L0,60 C300,0 900,120 1200,50 L1200,120 Z" fill={fill} />
+      ) : (
+        <>
+          <polygon points="0,0 1200,0 1200,95 0,120" fill="#b74b1b" />
+          <polygon points="0,0 1200,0 1200,75 0,105" fill="#f97933" />
+        </>
+      )}
+    </svg>
   );
 }
