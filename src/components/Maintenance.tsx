@@ -9,9 +9,11 @@ import {
   ChevronRight,
   ClipboardCopy,
   Copy,
+  Cpu,
   ExternalLink,
   Info,
   Loader2,
+  MonitorPlay,
   RefreshCw,
   Undo2,
   Wrench,
@@ -74,6 +76,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
   const [testing, setTesting] = useState(false);
   const [filter, setFilter] = useState<'all' | Severity>('all');
   const [openScreenId, setOpenScreenId] = useState<string | null>(null);
+  const [tab, setTab] = useState<'issues' | 'screens' | 'players' | 'history'>('issues');
   const [fixing, setFixing] = useState<string | null>(null);
   const [log, setLog] = useState<LogEvent[]>([]);
 
@@ -363,7 +366,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
       />
 
       {/* --- État global --- */}
-      <section className={cn('card overflow-hidden p-5', healthy ? 'border-emerald-200' : counts.critical ? 'border-red-200' : 'border-amber-200')}>
+      <section className={cn('card overflow-hidden p-4', healthy ? 'border-emerald-200' : counts.critical ? 'border-red-200' : 'border-amber-200')}>
         <div className="flex items-center gap-3">
           <span
             className={cn(
@@ -380,7 +383,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-3 grid grid-cols-4 gap-2">
           <Stat label="En ligne" value={`${onlineCount}`} sub={`/${screens.length}`} dot="online" />
           <Stat label="Hors ligne" value={`${screens.length - onlineCount}`} dot="offline" />
           <Stat label="Critiques" value={`${counts.critical}`} tone={counts.critical ? 'text-red-600' : undefined} />
@@ -393,8 +396,47 @@ export default function Maintenance({ groups, configurations, screens, onChanged
         </div>
       </section>
 
+      {/* --- Onglets --- */}
+      <nav className="no-scrollbar sticky top-0 z-10 -mx-4 flex gap-1 overflow-x-auto border-b border-line bg-cream/90 px-4 backdrop-blur sm:mx-0 sm:px-0" role="tablist">
+        {(
+          [
+            { id: 'issues', label: 'Problèmes', icon: <AlertTriangle className="h-4 w-4" />, count: counts.critical + counts.warning },
+            { id: 'screens', label: 'Écrans', icon: <MonitorPlay className="h-4 w-4" />, count: screens.length },
+            { id: 'players', label: 'Lecteurs', icon: <Cpu className="h-4 w-4" />, count: 0 },
+            { id: 'history', label: 'Historique', icon: <Activity className="h-4 w-4" />, count: 0 },
+          ] as const
+        ).map(t => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            onClick={() => setTab(t.id)}
+            className={cn(
+              'relative inline-flex h-12 flex-shrink-0 items-center gap-1.5 whitespace-nowrap px-3 text-sm font-bold transition-colors',
+              tab === t.id ? 'text-brand-800' : 'text-muted hover:text-ink',
+            )}
+          >
+            {t.icon}
+            {t.label}
+            {t.count > 0 && (
+              <span
+                className={cn(
+                  'inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-black tabular-nums',
+                  t.id === 'issues' ? (counts.critical ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700') : 'bg-sand text-ink',
+                )}
+              >
+                {t.count}
+              </span>
+            )}
+            {tab === t.id && <span className="absolute inset-x-2 -bottom-px h-[3px] rounded-full bg-brand" />}
+          </button>
+        ))}
+      </nav>
+
       {/* --- Problèmes --- */}
-      <section className="space-y-3">
+      {tab === 'issues' && (
+        <section className="space-y-3">
         <div className="no-scrollbar -mx-1 overflow-x-auto px-1">
           <Segmented
             value={filter}
@@ -451,12 +493,12 @@ export default function Maintenance({ groups, configurations, screens, onChanged
             })}
           </ul>
         )}
-      </section>
+        </section>
+      )}
 
       {/* --- Tous les écrans --- */}
-      <section className="space-y-3">
-        <h2 className="px-1 text-lg font-extrabold text-ink">Écrans</h2>
-        <ul className="card divide-y divide-sand overflow-hidden">
+      {tab === 'screens' && (
+        <ul className="card grid overflow-hidden lg:grid-cols-2 [&>li]:border-b [&>li]:border-sand lg:[&>li:nth-child(odd)]:border-r">
           {sortedScreens.map(s => {
             const { config, group } = placeOf(s);
             const worst = worstOf(s.id);
@@ -479,17 +521,14 @@ export default function Maintenance({ groups, configurations, screens, onChanged
             );
           })}
         </ul>
-      </section>
+      )}
 
       {/* --- Mises à jour des lecteurs --- */}
-      <PlayerUpdates screens={screens} groups={groups} configurations={configurations} now={now} onChanged={onChanged} />
+      {tab === 'players' && <PlayerUpdates screens={screens} groups={groups} configurations={configurations} now={now} onChanged={onChanged} />}
 
       {/* --- Historique (journal en base) ou activité de la session --- */}
-      <section className="space-y-3">
-        <h2 className="flex items-center gap-2 px-1 text-lg font-extrabold text-ink">
-          <Activity className="h-5 w-5 text-brand" />
-          Historique
-        </h2>
+      {tab === 'history' && (
+        <section className="space-y-3">
         {journal.available ? (
           <>
             <div className="no-scrollbar -mx-1 overflow-x-auto px-1">
@@ -529,7 +568,8 @@ export default function Maintenance({ groups, configurations, screens, onChanged
             ))}
           </ul>
         )}
-      </section>
+        </section>
+      )}
 
       {/* --- Fiche diagnostic d'un écran --- */}
       <Modal

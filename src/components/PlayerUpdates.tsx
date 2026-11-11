@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { CheckCircle2, CloudUpload, Cpu, Loader2, MonitorPlay, PackageCheck, Rocket, Store, TestTube2, XCircle } from 'lucide-react';
+import { CheckCircle2, CloudUpload, Loader2, MonitorPlay, PackageCheck, Rocket, Store, TestTube2, XCircle } from 'lucide-react';
 import { readApk, PLAYER_PACKAGE, type ApkInfo } from '../lib/apk';
 import { deployRelease, pruneReleases, screenVersionCode, updateStatus, uploadApk } from '../lib/playerRelease';
 import { errorMessage } from '../lib/data';
@@ -110,18 +110,9 @@ export default function PlayerUpdates({
 
   return (
     <section className="space-y-3">
-      <div className="flex items-center justify-between gap-3 px-1">
-        <h2 className="flex items-center gap-2 text-lg font-extrabold text-ink">
-          <Cpu className="h-5 w-5 text-brand" /> Lecteurs
-        </h2>
-        <Button size="sm" icon={<CloudUpload className="h-4 w-4" />} onClick={() => setOpen(true)}>
-          Mettre à jour
-        </Button>
-      </div>
-
       <div className="card space-y-4 p-4">
-        {/* Versions installées */}
-        <div className="flex flex-wrap gap-2">
+        {/* Versions installées + nouvelle version */}
+        <div className="flex flex-wrap items-center gap-2">
           {versions.map(([v, n]) => (
             <span key={v} className="inline-flex items-center gap-1.5 rounded-full bg-cream px-3 py-1 text-sm font-semibold text-ink">
               <PackageCheck className="h-4 w-4 text-brand" />
@@ -129,6 +120,9 @@ export default function PlayerUpdates({
               <span className="text-muted">· {n}</span>
             </span>
           ))}
+          <Button size="sm" className="ml-auto" icon={<CloudUpload className="h-4 w-4" />} onClick={() => setOpen(true)}>
+            Mettre à jour
+          </Button>
         </div>
 
         {/* Déploiement en cours */}
