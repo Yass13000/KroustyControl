@@ -12,12 +12,25 @@ import Dashboard from './components/Dashboard';
 import Maintenance from './components/Maintenance';
 import { diagnose } from './lib/diagnostics';
 import Splash from './components/Splash';
+import PairScreen from './components/PairScreen';
+import { normalizeCode } from './lib/pairingIds';
 import SynkLogo from './components/SynkLogo';
 import { Button, FeedbackProvider, IconButton, Input, cn, useFeedback } from './components/ui';
 
 export type { AppScreen } from './lib/types';
 
 type Tab = 'dashboard' | 'accueil' | 'appareils' | 'bibliotheque' | 'maintenance';
+
+/**
+ * Lien du QR code affiché sur une TV neuve : …/?tv=CODE.
+ * Le code est retiré de l'adresse et gardé le temps de la connexion (il survit à l'écran de login).
+ */
+let pendingPairCode: string | null = (() => {
+  const raw = new URLSearchParams(window.location.search).get('tv');
+  if (raw === null) return null;
+  window.history.replaceState(null, '', window.location.pathname);
+  return normalizeCode(raw);
+})();
 
 const SPLASH_MIN_MS = 3500;
 const SPLASH_FADE_MS = 550;
@@ -170,6 +183,12 @@ export function Main({ user }: { user: User }) {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   // Mur à ouvrir directement dans « Diffuser » (depuis le tableau de bord).
   const [focusConfigId, setFocusConfigId] = useState<string | null>(null);
+  // Connexion d'une TV : code lu dans le QR code, ou '' pour le saisir ; null = fermé.
+  const [pairCode, setPairCode] = useState<string | null>(() => {
+    const code = pendingPairCode;
+    pendingPairCode = null;
+    return code;
+  });
   const displayName = (() => {
     const base = (user.email || '').split('@')[0].split(/[._-]/)[0].replace(/\d+$/, '');
     return base ? base.charAt(0).toUpperCase() + base.slice(1) : '';
@@ -305,6 +324,8 @@ export function Main({ user }: { user: User }) {
               loading={fleet.loading}
               onChanged={fleet.refresh}
               now={now}
+              onPair={() => setPairCode('')}
+              waitingCount={fleet.isSuperAdmin ? fleet.waiting.filter(w => isOnline(w.last_ping, now)).length : 0}
             />
           )}
 
@@ -314,6 +335,21 @@ export function Main({ user }: { user: User }) {
             <Maintenance groups={fleet.groups} configurations={fleet.configurations} screens={fleet.screens} onChanged={fleet.refresh} />
           )}
         </div>
+
+        {pairCode !== null && !fleet.loading && (
+          <PairScreen
+            initialCode={pairCode}
+            groups={fleet.groups}
+            configurations={fleet.configurations}
+            screens={fleet.screens}
+            waiting={fleet.waiting}
+            userId={user.id}
+            isSuperAdmin={fleet.isSuperAdmin}
+            now={now}
+            onClose={() => setPairCode(null)}
+            onChanged={fleet.refresh}
+          />
+        )}
 
         <footer className="pt-10 text-center">
           <button

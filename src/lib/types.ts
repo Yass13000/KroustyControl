@@ -49,7 +49,7 @@ export interface ScreenEvent {
   created_at: string;
 }
 
-export type ScreenCommand = 'reload' | 'clear_cache';
+export type ScreenCommand = 'reload' | 'clear_cache' | 'unpair' | 'identify';
 
 export interface Profile {
   id: string;

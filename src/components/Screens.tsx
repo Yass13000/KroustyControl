@@ -1,10 +1,11 @@
 import { useMemo, useState, type ChangeEvent } from 'react';
-import { Camera, Check, ChevronLeft, Pencil, ChevronRight, Film, Hourglass, ImagePlus, LayoutGrid, Monitor, MonitorPlay, Plus, Search, Store, Trash2, Unplug, UserRound } from 'lucide-react';
+import { ArrowLeftRight, Camera, Check, ChevronLeft, Pencil, ChevronRight, Film, FlipVertical2, Hourglass, ImagePlus, LayoutGrid, Monitor, MonitorPlay, Plus, ScanEye, Search, Store, Trash2, Unplug, UserRound, QrCode, X } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
-import { errorMessage, must, useAccounts, useLibrary } from '../lib/data';
+import { errorMessage, must, mustAll, sendScreenCommand, useAccounts, useLibrary } from '../lib/data';
+import { screenVersionCode } from '../lib/playerRelease';
 import { FORMATS, fileNameFromUrl, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from '../lib/media';
 import type { AppScreen, Configuration, Group, Profile } from '../lib/types';
-import { Badge, Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Select, Spinner, StatusDot, cn, useFeedback } from './ui';
+import { Badge, Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Select, Spinner, StatusDot, Switch, cn, useFeedback } from './ui';
 
 export type { AppScreen } from '../lib/types';
 
@@ -16,6 +17,10 @@ interface ScreensProps {
   loading: boolean;
   onChanged: () => void;
   now: number;
+  /** Ouvre la connexion d'une TV (QR code). */
+  onPair: () => void;
+  /** TV allumées qui attendent d'être connectées. */
+  waitingCount: number;
 }
 
 /** Valeurs d'un écran remis « en attente » (non assigné). */
@@ -29,7 +34,7 @@ const UNASSIGNED = {
   audio_url: '',
 };
 
-export default function Screens({ groups, configurations, screens, isSuperAdmin, loading, onChanged, now }: ScreensProps) {
+export default function Screens({ groups, configurations, screens, isSuperAdmin, loading, onChanged, now, onPair, waitingCount }: ScreensProps) {
   const { toast, confirm } = useFeedback();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -48,6 +53,9 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
   const [newConfigName, setNewConfigName] = useState('');
   const [renaming, setRenaming] = useState<string | null>(null);
   const [newConfigFormat, setNewConfigFormat] = useState('1x1');
+  // Réglages d'un écran du mur (admin) et déplacement / échange de position.
+  const [slotScreenId, setSlotScreenId] = useState<string | null>(null);
+  const [moving, setMoving] = useState<string | null>(null);
   const [assignTarget, setAssignTarget] = useState<{ configId: string; format: string; x: number; y: number; displayNum: number } | null>(null);
 
   // Les objets sélectionnés sont dérivés des données : s'ils disparaissent (temps réel), la modale se ferme seule.
@@ -219,6 +227,27 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
     if (ok) await run(async () => must(await sbClient.from('screens_config').update(UNASSIGNED).eq('id', screenId)), 'Écran retiré');
   };
 
+  /** Déplace l'écran en cours de déplacement vers (x, y) ; si la place est prise, les deux écrans échangent. */
+  const moveTo = async (config: Configuration, x: number, y: number) => {
+    const mover = screens.find(s => s.id === moving);
+    setMoving(null);
+    if (!mover || (mover.pos_x === x && mover.pos_y === y)) return;
+    const other = screens.find(s => s.configuration_id === config.id && s.pos_x === x && s.pos_y === y);
+    await run(
+      () =>
+        mustAll([
+          sbClient.from('screens_config').update({ pos_x: x, pos_y: y }).eq('id', mover.id),
+          ...(other ? [sbClient.from('screens_config').update({ pos_x: mover.pos_x, pos_y: mover.pos_y }).eq('id', other.id)] : []),
+        ]),
+      other ? 'Écrans échangés' : 'Écran déplacé',
+    );
+  };
+
+  const setUpsideDown = (s: AppScreen, on: boolean) =>
+    run(async () => must(await sbClient.from('screens_config').update({ rotation: on ? 180 : 0 }).eq('id', s.id)), on ? 'Image retournée' : 'Image remise à l’endroit');
+
+  const identify = (s: AppScreen) => run(() => sendScreenCommand([s.id], 'identify'), 'Le nom s’affiche sur la TV');
+
   const submitAssign = async (screenId: string) => {
     if (!assignTarget) return;
     const { configId, format, x, y } = assignTarget;
@@ -278,8 +307,20 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
           const playlist = parsePlaylist(s.video_url);
           const firstUrl = playlist[0] || '';
           const previewUrl = transformStorageUrl(firstUrl);
+          const isMover = moving === s.id;
           slots.push(
-            <div key={s.id} className="relative flex h-32 flex-col overflow-hidden rounded-2xl bg-ink">
+            <button
+              key={s.id}
+              type="button"
+              disabled={!isSuperAdmin}
+              onClick={() => (moving ? moveTo(config, x, y) : setSlotScreenId(s.id))}
+              className={cn(
+                'relative flex h-32 flex-col overflow-hidden rounded-2xl bg-ink text-left transition',
+                isSuperAdmin && 'hover:ring-2 hover:ring-brand/60 active:scale-[0.98]',
+                isMover && 'ring-4 ring-brand',
+                moving && !isMover && 'ring-2 ring-dashed ring-white/40',
+              )}
+            >
               {previewUrl && (
                 <video
                   key={previewUrl}
@@ -297,11 +338,14 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
               <div className="relative z-10 flex h-full flex-col justify-between p-2.5">
                 <div className="flex items-start justify-between">
                   <StatusDot online={online(s)} sleeping={s.power_state === 'sleep'} className="mt-1" />
-                  {isSuperAdmin && (
-                    <IconButton label={`Retirer ${s.id}`} variant="onDark" size="sm" onClick={() => resetScreen(s.id)}>
-                      <Unplug className="h-4 w-4" />
-                    </IconButton>
-                  )}
+                  <span className="flex items-center gap-1">
+                    {s.rotation === 180 && (
+                      <span className="rounded-md bg-white/15 px-1.5 py-0.5 text-[10px] font-black text-white" title="Image retournée">
+                        180°
+                      </span>
+                    )}
+                    <span className="rounded-md bg-white/15 px-1.5 py-0.5 text-[10px] font-black text-white/80">{slot}</span>
+                  </span>
                 </div>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-extrabold text-white">{s.id}</p>
@@ -313,7 +357,7 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
                   )}
                 </div>
               </div>
-            </div>,
+            </button>,
           );
         } else {
           slots.push(
@@ -321,9 +365,10 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
               key={`empty-${y}-${x}`}
               type="button"
               disabled={!isSuperAdmin}
-              onClick={() => setAssignTarget({ configId: config.id, format: config.format, x, y, displayNum: slot })}
+              onClick={() => (moving ? moveTo(config, x, y) : setAssignTarget({ configId: config.id, format: config.format, x, y, displayNum: slot }))}
               className={cn(
                 'flex h-32 flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-line bg-cream/60 text-center transition',
+                moving && 'border-brand bg-brand-50',
                 isSuperAdmin ? 'hover:border-brand/50 hover:bg-brand-50 active:scale-[0.98]' : 'cursor-default opacity-70',
               )}
             >
@@ -336,8 +381,19 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
     }
 
     return (
-      <div className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
-        {slots}
+      <div className="space-y-2.5">
+        {moving && inConfig.some(s => s.id === moving) && (
+          <div className="flex items-center gap-2 rounded-2xl bg-brand px-4 py-2.5 text-sm font-bold text-white animate-in fade-in">
+            <ArrowLeftRight className="h-4 w-4 flex-shrink-0" />
+            <span className="min-w-0 flex-1 truncate">Touchez la nouvelle place de {moving}</span>
+            <IconButton label="Annuler" size="sm" variant="onDark" onClick={() => setMoving(null)}>
+              <X className="h-4 w-4" />
+            </IconButton>
+          </div>
+        )}
+        <div className="grid gap-2.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+          {slots}
+        </div>
       </div>
     );
   };
@@ -466,11 +522,17 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
       <PageTitle
         title="Écrans"
         actions={
-          isSuperAdmin && (
-            <IconButton label="Nouveau restaurant" variant="secondary" onClick={() => setShowCreateForm(v => !v)}>
-              <Plus className={cn('h-5 w-5 transition-transform', showCreateForm && 'rotate-45')} />
-            </IconButton>
-          )
+          <div className="flex gap-2">
+            <Button size="sm" icon={<QrCode className="h-4 w-4" />} onClick={onPair}>
+              Connecter une TV
+              {waitingCount > 0 && <span className="ml-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1.5 text-[11px] font-black text-brand-800">{waitingCount}</span>}
+            </Button>
+            {isSuperAdmin && (
+              <IconButton label="Nouveau restaurant" variant="secondary" onClick={() => setShowCreateForm(v => !v)}>
+                <Plus className={cn('h-5 w-5 transition-transform', showCreateForm && 'rotate-45')} />
+              </IconButton>
+            )}
+          </div>
         }
       />
 
@@ -793,6 +855,57 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
           </div>
         )}
       </Modal>
+
+      {/* ======================= RÉGLAGES D'UN ÉCRAN DU MUR ======================= */}
+      {(() => {
+        const s = screens.find(scr => scr.id === slotScreenId);
+        const modern = s ? (screenVersionCode(s) ?? 0) >= 6 : false;
+        return (
+          <Modal open={!!s && isSuperAdmin} onClose={() => setSlotScreenId(null)} size="sm" z="z-[60]" title={s?.id} leading={s && <StatusDot online={online(s)} sleeping={s.power_state === 'sleep'} />}>
+            {s && (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  disabled={!modern || !online(s)}
+                  onClick={() => identify(s)}
+                  className="flex w-full items-center gap-3 rounded-2xl border border-line bg-white p-3.5 text-left transition hover:border-brand/40 disabled:opacity-50"
+                >
+                  <ScanEye className="h-5 w-5 text-brand" />
+                  <span className="flex-1 text-sm font-bold text-ink">Identifier sur la TV</span>
+                </button>
+                <div className={cn('flex items-center gap-3 rounded-2xl border border-line bg-white p-3.5', !modern && 'opacity-50')}>
+                  <FlipVertical2 className="h-5 w-5 text-brand" />
+                  <span className="flex-1 text-sm font-bold text-ink">TV montée à l’envers</span>
+                  <Switch label="TV montée à l’envers" checked={s.rotation === 180} disabled={!modern} onChange={v => setUpsideDown(s, v)} />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoving(s.id);
+                    setSlotScreenId(null);
+                  }}
+                  className="flex w-full items-center gap-3 rounded-2xl border border-line bg-white p-3.5 text-left transition hover:border-brand/40"
+                >
+                  <ArrowLeftRight className="h-5 w-5 text-brand" />
+                  <span className="flex-1 text-sm font-bold text-ink">Déplacer ou échanger</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSlotScreenId(null);
+                    resetScreen(s.id);
+                  }}
+                  className="flex w-full items-center gap-3 rounded-2xl border border-red-100 bg-red-50/50 p-3.5 text-left transition hover:border-red-300"
+                >
+                  <Unplug className="h-5 w-5 text-red-600" />
+                  <span className="flex-1 text-sm font-bold text-red-700">Retirer du mur</span>
+                </button>
+                {!modern && <p className="px-1 pt-1 text-xs text-muted">Identifier et retourner l’image : lecteur 1.5 requis.</p>}
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
 
       {/* ======================= MODALE ASSIGNATION ======================= */}
       <Modal

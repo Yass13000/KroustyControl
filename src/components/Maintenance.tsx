@@ -16,6 +16,7 @@ import {
   MonitorPlay,
   RefreshCw,
   Undo2,
+  Unplug,
   Wrench,
   XCircle,
 } from 'lucide-react';
@@ -39,6 +40,7 @@ import {
 } from '../lib/diagnostics';
 import type { AppScreen, Configuration, Group, ScreenCommand, ScreenEvent } from '../lib/types';
 import PlayerUpdates from './PlayerUpdates';
+import { screenVersionCode } from '../lib/playerRelease';
 import { Button, EmptyState, IconButton, Modal, PageTitle, Segmented, StatusDot, cn, useFeedback } from './ui';
 
 interface MaintenanceProps {
@@ -281,9 +283,12 @@ export default function Maintenance({ groups, configurations, screens, onChanged
   const sendCommand = async (s: AppScreen, command: ScreenCommand) => {
     const ok = await confirm({
       title: `${commandLabel(command)} ?`,
-      message: `${s.id} · exécuté sous 30 s si l’écran est en ligne (1 min en veille)`,
+      message:
+        command === 'unpair'
+          ? `${s.id} · la TV oublie cet écran et réaffiche son QR code`
+          : `${s.id} · exécuté sous 30 s si l’écran est en ligne (1 min en veille)`,
       confirmLabel: 'Envoyer',
-      danger: command === 'clear_cache',
+      danger: command !== 'reload',
     });
     if (!ok) return;
     try {
@@ -713,6 +718,12 @@ export default function Maintenance({ groups, configurations, screens, onChanged
             <Button variant="secondary" icon={<Eraser className="h-4 w-4" />} disabled={pending} onClick={() => sendCommand(s, 'clear_cache')}>
               Vider le cache
             </Button>
+            {/* Lecteur 1.4+ : la TV revient à l'écran QR code */}
+            {(screenVersionCode(s) ?? 0) >= 5 && (
+              <Button variant="dangerSoft" className="col-span-2" icon={<Unplug className="h-4 w-4" />} disabled={pending} onClick={() => sendCommand(s, 'unpair')}>
+                Déconnecter la TV
+              </Button>
+            )}
           </div>
           {pending && (
             <p className="flex items-center gap-2 rounded-2xl bg-amber-50 px-3 py-2.5 text-sm font-semibold text-amber-700">

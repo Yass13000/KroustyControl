@@ -8,7 +8,7 @@ const BUCKET = 'player';
 const KEEP = 3; // nombre de versions conservées dans le stockage
 
 /** Code de version d'un écran, lu dans player_version (« 1.2 (3) »). */
-export const screenVersionCode = (s: AppScreen) => {
+export const screenVersionCode = (s: Pick<AppScreen, 'player_version'>) => {
   const m = (s.player_version || '').match(/\((\d+)\)/);
   return m ? Number(m[1]) : null;
 };

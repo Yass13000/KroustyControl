@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { sbClient } from './supabase';
 import { analyzeVideo, readCache, writeCache, type VideoAnalysis } from './videoAnalysis';
+import { isPairingId, isPairingRow } from './pairingIds';
 import type { Album, AppScreen, Configuration, Group, Profile, ScreenCommand, ScreenEvent, VideoFile } from './types';
 
 /** Supabase ne lève pas d'exception : on transforme `{ error }` en erreur. */
@@ -176,6 +177,8 @@ export function useFleetData(user: User | null) {
         if (payload.eventType === 'UPDATE' && payload.new) {
           const next = payload.new as AppScreen;
           const current = screensRef.current.find(s => s.id === next.id);
+          // TV en attente de connexion hors de notre périmètre : son signal de vie ne nous concerne pas.
+          if (!current && isPairingId(next.id)) return;
           // Écran hors de notre périmètre ou changement d'assignation → rechargement complet.
           if (!current || current.configuration_id !== next.configuration_id) {
             scheduleRefresh();
@@ -194,7 +197,11 @@ export function useFleetData(user: User | null) {
     };
   }, [userId, refresh]);
 
-  return { groups, configurations, screens, loading, role, isSuperAdmin, refresh };
+  // Les TV qui attendent d'être connectées (QR code) ne sont pas des écrans : on les sépare.
+  const fleetScreens = useMemo(() => screens.filter(s => !isPairingRow(s)), [screens]);
+  const waiting = useMemo(() => screens.filter(isPairingRow), [screens]);
+
+  return { groups, configurations, screens: fleetScreens, waiting, loading, role, isSuperAdmin, refresh };
 }
 
 /** Liste des comptes (admin uniquement) : sert à choisir le propriétaire d'un écran ou d'un restaurant. */
