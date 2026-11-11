@@ -3,6 +3,7 @@ import type { User } from '@supabase/supabase-js';
 import { sbClient } from './supabase';
 import { analyzeVideo, readCache, writeCache, type VideoAnalysis } from './videoAnalysis';
 import { isPairingId, isPairingRow } from './pairingIds';
+import { isImageUrl } from './media';
 import type { Album, AppScreen, Configuration, Group, Profile, ScreenCommand, ScreenEvent, VideoFile } from './types';
 
 /** Supabase ne lève pas d'exception : on transforme `{ error }` en erreur. */
@@ -289,7 +290,8 @@ export function useVideoAnalyses(urls: string[]) {
       // Analyse réussie : définitive. Échec (lien mort…) : retesté au plus une fois par jour.
       return !!c && (c.ok || (c.checkedAt !== undefined && Date.now() - c.checkedAt < 24 * 3600 * 1000));
     };
-    const todo = list.filter(u => u && (force || (!fresh(u) && !queued.current.has(u))));
+    // Les images n'ont pas d'en-tête vidéo à analyser.
+    const todo = list.filter(u => u && !isImageUrl(u) && (force || (!fresh(u) && !queued.current.has(u))));
     if (todo.length === 0) return;
     todo.forEach(u => queued.current.add(u));
     setPending(prev => new Set([...prev, ...todo]));

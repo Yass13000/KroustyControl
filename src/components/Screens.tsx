@@ -3,7 +3,7 @@ import { ArrowLeftRight, Camera, Check, ChevronLeft, Pencil, ChevronRight, Film,
 import { sbClient } from '../lib/supabase';
 import { errorMessage, must, mustAll, sendScreenCommand, useAccounts, useLibrary } from '../lib/data';
 import { screenVersionCode } from '../lib/playerRelease';
-import { FORMATS, fileNameFromUrl, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from '../lib/media';
+import { FORMATS, fileNameFromUrl, isImageUrl, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from '../lib/media';
 import type { AppScreen, Configuration, Group, Profile } from '../lib/types';
 import { Badge, Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Select, Spinner, StatusDot, Switch, cn, useFeedback } from './ui';
 
@@ -321,7 +321,9 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
                 moving && !isMover && 'ring-2 ring-dashed ring-white/40',
               )}
             >
-              {previewUrl && (
+              {previewUrl && isImageUrl(previewUrl) ? (
+                <img src={previewUrl} alt="" loading="lazy" className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-50" />
+              ) : previewUrl && (
                 <video
                   key={previewUrl}
                   src={previewUrl}
@@ -450,6 +452,8 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
               <div className="relative aspect-[16/7] bg-ink sm:aspect-video">
                 {thumb ? (
                   <img src={thumb} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover opacity-85" />
+                ) : preview && isImageUrl(preview) ? (
+                  <img src={preview} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover opacity-80" />
                 ) : preview ? (
                   <video
                     src={`${preview}#t=5`}

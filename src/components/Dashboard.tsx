@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { Activity, CalendarClock, ChevronRight, Clapperboard, MonitorPlay, Rocket, Stethoscope, Store, Upload } from 'lucide-react';
 import { useLibrary, useScreenEvents } from '../lib/data';
 import { libraryAccess } from '../lib/library';
-import { isOnline, parseFormat, parsePlaylist, timeAgo } from '../lib/media';
+import { isImageUrl, isOnline, parseFormat, parsePlaylist, timeAgo } from '../lib/media';
 import type { AppScreen, Configuration, Group, ScreenEvent } from '../lib/types';
 import { cn } from './ui';
 
@@ -278,6 +278,8 @@ function MiniWall({ config, screens, thumb, videoUrl, now }: { config: Configura
     <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-brand to-brand-800" style={{ aspectRatio: `${cols * 16} / ${rows * 9}` }}>
       {thumb ? (
         <img src={thumb} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover" />
+      ) : videoUrl && isImageUrl(videoUrl) ? (
+        <img src={videoUrl} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover" />
       ) : videoUrl ? (
         <video
           src={`${videoUrl}#t=5`}

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, CloudUpload, HardDrive, ChevronLeft, ChevronRight, ClipboardCopy, Copy, Film, FolderOpen, FolderPlus, Gauge, Link2, Loader2, MonitorPlay, Play, Plus, RefreshCw, Search, Trash2, Video, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CloudUpload, HardDrive, Image as ImageIcon, ChevronLeft, ChevronRight, ClipboardCopy, Copy, Film, FolderOpen, FolderPlus, Gauge, Link2, Loader2, MonitorPlay, Play, Plus, RefreshCw, Search, Trash2, Video, XCircle } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
 import { errorMessage, must, useLibrary, useVideoAnalyses } from '../lib/data';
-import { fileExtension, googleDriveThumbnail, isGoogleDrive, parsePlaylist, transformStorageUrl } from '../lib/media';
+import { IMAGE_SECONDS, fileExtension, googleDriveThumbnail, isGoogleDrive, isImageUrl, parsePlaylist, transformStorageUrl } from '../lib/media';
+import { imageThumbnail, isImageFile, prepareImage } from '../lib/image';
 import type { Album, AppScreen, Configuration, Group, VideoFile } from '../lib/types';
 import { COMMON, libraryAccess, ownerLabel } from '../lib/library';
 import { FORMAT_CODES, FORMAT_SHORT, SOURCE_LABEL, resolveFormat, usageFormats, type FormatSource } from '../lib/videoFormat';
@@ -36,9 +37,10 @@ interface VideosProps {
 }
 
 /** Tente de capturer une image de la vidéo (échoue silencieusement si le CORS l'interdit). */
-const generateThumbnail = (url: string): Promise<string> =>
+const generateThumbnail = (url: string, image = false): Promise<string> =>
   new Promise(resolve => {
     if (isGoogleDrive(url)) return resolve(googleDriveThumbnail(url));
+    if (image || isImageUrl(url)) return resolve(imageThumbnail(url));
 
     const video = document.createElement('video');
     const done = (value: string) => {
@@ -165,6 +167,8 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   const [addMode, setAddMode] = useState<'file' | 'link'>('file');
   const [file, setFile] = useState<File | null>(null);
   const [fileAnalysis, setFileAnalysis] = useState<VideoAnalysis | null>(null);
+  // Image choisie : préparée (sens, taille, JPEG) avant l'envoi.
+  const [fileIsImage, setFileIsImage] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [space, setSpace] = useState<{ used: number; allocated: number } | null>(null);
   const [uploadUnavailable, setUploadUnavailable] = useState<{ message: string; state: SetupState } | null>(null);
@@ -240,6 +244,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   };
 
   const closeAddVideo = () => {
+    setFileIsImage(false);
     abortRef.current?.abort();
     setAddVideoAlbumId(null);
     setNewVideoName('');
@@ -302,14 +307,27 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   const pickFile = async (f: File | null) => {
     setFile(f);
     setFileAnalysis(null);
+    setFileIsImage(false);
     if (!f) return;
     if (!newVideoName.trim()) setNewVideoName(f.name.replace(/\.[^.]+$/, ''));
+    if (isImageFile(f)) {
+      setFileIsImage(true);
+      try {
+        const img = await prepareImage(f);
+        setFile(img.file);
+        setFileAnalysis({ ok: true, width: img.width, height: img.height, size: img.file.size });
+      } catch (err) {
+        setFile(null);
+        toast(errorMessage(err), 'error');
+      }
+      return;
+    }
     setFileAnalysis(await analyzeFile(f));
   };
 
   /** Ajoute la vidéo à la bibliothèque (avec miniature si possible). */
   const insertVideo = async (name: string, url: string, size: string, thumbSource = url, analysis?: VideoAnalysis | null) => {
-    const thumbnail = await generateThumbnail(thumbSource);
+    const thumbnail = await generateThumbnail(thumbSource, isImageUrl(url));
     // Format de mur déduit dès l'ajout (nom de la vidéo ou du dossier, puis dimensions).
     const { format } = resolveFormat({ id: '', album_id: addVideoAlbumId || '', name, url }, { analysis: analysis || undefined, albumName: albumOf(addVideoAlbumId)?.name });
     const base = { album_id: addVideoAlbumId, name, url, size };
@@ -330,9 +348,9 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
     try {
       const url = await uploadVideo(file, setProgress, controller.signal);
       // L'analyse faite avant l'envoi est réutilisée : aucune requête de plus.
-      if (fileAnalysis?.ok) writeCache({ ...readCache(), [url]: fileAnalysis });
+      if (fileAnalysis?.ok && !fileIsImage) writeCache({ ...readCache(), [url]: fileAnalysis });
       await insertVideo(name, url, megabytes(file.size), localUrl, fileAnalysis);
-      toast('Vidéo envoyée');
+      toast(fileIsImage ? 'Image envoyée' : 'Vidéo envoyée');
       closeAddVideo();
       await refresh();
     } catch (err) {
@@ -802,9 +820,9 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                       <span className="text-xs text-muted">{megabytes(file.size)}</span>
                     </>
                   ) : (
-                    <span className="text-sm font-bold text-ink">Choisir une vidéo</span>
+                    <span className="text-sm font-bold text-ink">Choisir une vidéo ou une image</span>
                   )}
-                  <input type="file" accept="video/mp4,video/quicktime,video/*" className="sr-only" disabled={busy} onChange={e => pickFile(e.target.files?.[0] || null)} />
+                  <input type="file" accept="video/mp4,video/quicktime,video/*,image/jpeg,image/png,image/webp" className="sr-only" disabled={busy} onChange={e => pickFile(e.target.files?.[0] || null)} />
                 </label>
 
                 {progress !== null && (
@@ -813,7 +831,16 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                   </div>
                 )}
 
-                {file && progress === null && <AnalysisLine analysis={fileAnalysis} />}
+                {file && progress === null && fileIsImage ? (
+                  fileAnalysis && (
+                    <p className="flex items-center justify-center gap-1.5 text-sm font-semibold text-emerald-700">
+                      <ImageIcon className="h-4 w-4" />
+                      {fileAnalysis.width} × {fileAnalysis.height} · {IMAGE_SECONDS} s par passage
+                    </p>
+                  )
+                ) : (
+                  file && progress === null && <AnalysisLine analysis={fileAnalysis} />
+                )}
               </>
             )
           ) : (
@@ -888,6 +915,12 @@ function VideoCard({
             {usedOn.length}
           </span>
         )}
+        {isImageUrl(video.url) ? (
+          <span className="pointer-events-none absolute bottom-1.5 left-1.5 inline-flex h-7 items-center gap-1 rounded-full bg-black/45 px-2 text-[11px] font-bold text-white backdrop-blur">
+            <ImageIcon className="h-3.5 w-3.5" />
+            {IMAGE_SECONDS} s
+          </span>
+        ) : (
         <button
           type="button"
           onClick={onInspect}
@@ -909,6 +942,7 @@ function VideoCard({
           {quality === 'incompatible' && 'Incompatible'}
           {quality === 'unknown' && 'Illisible'}
         </button>
+        )}
         <div className="absolute right-1.5 top-1.5 flex gap-1">
           <IconButton label="Copier le lien" size="sm" variant="onDark" onClick={onCopy}>
             <Copy className="h-3.5 w-3.5" />
@@ -951,6 +985,7 @@ function VideoThumb({ video, className, dead }: { video: VideoFile; className?: 
   const cls = cn('h-full w-full object-cover', className);
 
   if (video.thumbnail && !failed) return <img src={video.thumbnail} alt="" loading="lazy" className={cls} onError={() => setFailed(true)} />;
+  if (isImageUrl(video.url) && !failed) return <img src={video.url} alt="" loading="lazy" className={cls} onError={() => setFailed(true)} />;
   if (video.url && !isGoogleDrive(video.url) && !failed) {
     // #t=5 : image prise après les fondus d’ouverture (souvent noirs) ; preload="metadata" évite de télécharger tout le fichier.
     return <video src={`${video.url}#t=5`} muted playsInline preload="metadata" className={cn(cls, 'pointer-events-none')} onError={() => setFailed(true)} />;

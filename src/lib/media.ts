@@ -109,3 +109,17 @@ export const fileExtension = (name: string) => {
   const parts = name.split('.');
   return parts.length > 1 ? parts.pop()!.toUpperCase() : 'LIEN';
 };
+
+/* ------------------------------ Images ------------------------------ */
+
+/** Durée d'affichage d'une image sur les TV (fixée dans le lecteur). */
+export const IMAGE_SECONDS = 20;
+const IMAGE_EXT = /\.(jpe?g|png|webp)$/i;
+
+/** Image ou vidéo, d'après l'extension du lien (même règle que le lecteur des TV). */
+export const isImageUrl = (url: string | null | undefined) => {
+  const path = (url || '').split('#')[0].split('?')[0];
+  return IMAGE_EXT.test(path);
+};
+
+export const playlistHasImages = (raw: string | null | undefined) => parsePlaylist(raw).some(isImageUrl);

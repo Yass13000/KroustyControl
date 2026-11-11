@@ -1,5 +1,5 @@
 // Moteur de diagnostic du parc : analyse les données et liste les problèmes, classés par gravité.
-import { ONLINE_THRESHOLD_MS, isGoogleDrive, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from './media';
+import { IMAGE_SECONDS, ONLINE_THRESHOLD_MS, isGoogleDrive, isImageUrl, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from './media';
 import type { AppScreen, Configuration, Group, ScreenEvent, VideoFile } from './types';
 import { assess, wallTarget, type VideoAnalysis } from './videoAnalysis';
 
@@ -336,6 +336,28 @@ export const shortUrl = (url: string) => {
 
 /** Charge uniquement les métadonnées d'une vidéo pour vérifier qu'elle est lisible. */
 export const probeMedia = (url: string, timeoutMs = 25000): Promise<MediaStatus> =>
+  isImageUrl(url) ? probeImage(url, timeoutMs) : probeVideo(url, timeoutMs);
+
+/** Image : chargée en entier (quelques centaines de Ko). */
+const probeImage = (url: string, timeoutMs: number): Promise<MediaStatus> =>
+  new Promise(resolve => {
+    const img = new Image();
+    const timer = setTimeout(() => {
+      img.src = '';
+      resolve({ state: 'timeout' });
+    }, timeoutMs);
+    img.onload = () => {
+      clearTimeout(timer);
+      resolve({ state: 'ok', duration: IMAGE_SECONDS, width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      resolve({ state: 'error' });
+    };
+    img.src = url;
+  });
+
+const probeVideo = (url: string, timeoutMs: number): Promise<MediaStatus> =>
   new Promise(resolve => {
     const v = document.createElement('video');
     let done = false;

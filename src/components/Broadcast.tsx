@@ -24,7 +24,8 @@ import Schedules from './Schedules';
 import { albumsForGroups } from '../lib/library';
 import { FORMAT_SHORT, resolveFormat, usageFormats } from '../lib/videoFormat';
 import { errorMessage, mustAll, useLibrary } from '../lib/data';
-import { FORMATS, isOnline, parseFormat, parsePlaylist, transformStorageUrl } from '../lib/media';
+import { FORMATS, isOnline, parseFormat, parsePlaylist, playlistHasImages, transformStorageUrl } from '../lib/media';
+import { supportsImages } from '../lib/playerRelease';
 import type { AppScreen, Configuration, Group, GroupMode } from '../lib/types';
 import { Badge, Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Spinner, StatusDot, Switch, cn, useFeedback } from './ui';
 
@@ -192,8 +193,30 @@ export default function Broadcast({
 
   const hasEdits = activeEdits.schedule || activeEdits.audio || activeEdits.video;
 
+  /** Écrans qui recevraient une playlist avec des images alors que leur lecteur ne sait pas les afficher. */
+  const screensBlockedByImages = () => {
+    if (!activeEdits.video) return [];
+    const blocked: string[] = [];
+    for (const configId of targetConfigIds) {
+      const config = configurations.find(c => c.id === configId);
+      if (!config) continue;
+      const perScreen = selectedCount === 1 && (groupModes[config.id] || 'global') === 'per-screen';
+      for (const s of screens.filter(scr => scr.configuration_id === config.id)) {
+        const playlist = attributionInputs[perScreen ? screenVideoKeyOf(s.id) : globalVideoKeyOf(targetConfigIds[0])];
+        if (playlistHasImages(playlist) && !supportsImages(s)) blocked.push(s.id);
+      }
+    }
+    return blocked;
+  };
+
   const applyConfig = async () => {
     if (isSaving || selectedCount === 0 || !hasEdits) return;
+    // Un ancien lecteur ne sait pas afficher une image : il resterait bloqué en erreur.
+    const blocked = screensBlockedByImages();
+    if (blocked.length > 0) {
+      toast(`Images : lecteur 1.6 requis sur ${blocked.length > 2 ? `${blocked.length} écrans` : blocked.join(', ')}`, 'error');
+      return;
+    }
     setIsSaving(true);
     try {
       const queries: PromiseLike<{ error: unknown }>[] = [];
@@ -497,7 +520,7 @@ export default function Broadcast({
             )}
           </EditSection>
 
-          <Schedules configId={config.id} videos={library.videos} albums={albumsForGroups(library.albums, new Set([config.group_id]))} perScreen={mode === 'per-screen'} />
+          <Schedules configId={config.id} screens={screens.filter(s => s.configuration_id === config.id)} videos={library.videos} albums={albumsForGroups(library.albums, new Set([config.group_id]))} perScreen={mode === 'per-screen'} />
         </section>
       );
     }

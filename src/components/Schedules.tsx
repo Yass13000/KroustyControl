@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CalendarClock, Check, ChevronLeft, Film, FolderOpen, Plus, Trash2, X } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
 import { errorMessage, must, useNow } from '../lib/data';
-import { parsePlaylist } from '../lib/media';
-import type { Album, VideoFile } from '../lib/types';
+import { isImageUrl, parsePlaylist } from '../lib/media';
+import { supportsImages } from '../lib/playerRelease';
+import type { Album, VideoFile, AppScreen } from '../lib/types';
 import { Badge, Button, IconButton, Modal, Switch, cn, useFeedback } from './ui';
 
 /**
@@ -54,7 +55,20 @@ export function activeSchedule(list: Schedule[], now: number) {
     .sort((x, y) => toMin(y.start_time) - toMin(x.start_time))[0];
 }
 
-export default function Schedules({ configId, videos, albums, perScreen = false }: { configId: string; videos: VideoFile[]; albums: Album[]; perScreen?: boolean }) {
+export default function Schedules({
+  configId,
+  screens,
+  videos,
+  albums,
+  perScreen = false,
+}: {
+  configId: string;
+  /** Écrans du mur : une image n'est proposée que si tous savent l'afficher. */
+  screens: AppScreen[];
+  videos: VideoFile[];
+  albums: Album[];
+  perScreen?: boolean;
+}) {
   const { toast, confirm } = useFeedback();
   const now = useNow(30000);
   const [list, setList] = useState<Schedule[]>([]);
@@ -289,7 +303,14 @@ export default function Schedules({ configId, videos, albums, perScreen = false 
                   <button
                     key={v.id}
                     type="button"
-                    onClick={() => save(picker.id, { video_url: [...parsePlaylist(picker.video_url), v.url].join(',') })}
+                    onClick={() => {
+                      const old = screens.filter(s => !supportsImages(s));
+                      if (isImageUrl(v.url) && old.length > 0) {
+                        toast(`Images : lecteur 1.6 requis sur ${old.length > 2 ? `${old.length} écrans` : old.map(s => s.id).join(', ')}`, 'error');
+                        return;
+                      }
+                      save(picker.id, { video_url: [...parsePlaylist(picker.video_url), v.url].join(',') });
+                    }}
                     className="flex w-full items-center gap-3 rounded-2xl border border-line bg-white p-3 text-left transition hover:border-brand/40"
                   >
                     <Film className="h-5 w-5 flex-shrink-0 text-brand" />

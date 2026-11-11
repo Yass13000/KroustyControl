@@ -3,7 +3,7 @@ import type { User } from '@supabase/supabase-js';
 import { AlertCircle, Clapperboard, House, Moon, Rocket, Stethoscope, Eye, EyeOff, Lock, LogOut, Mail, Monitor, MonitorPlay, RotateCcw, ShieldCheck, X } from 'lucide-react';
 import { sbAuth } from './lib/supabase';
 import { useFleetData, useNow } from './lib/data';
-import { isOnline } from './lib/media';
+import { isImageUrl, isOnline } from './lib/media';
 import type { GroupMode } from './lib/types';
 import Broadcast from './components/Broadcast';
 import Screens from './components/Screens';
@@ -438,7 +438,11 @@ function VideoPlayer({ src, onClose }: { src: string; onClose: () => void }) {
         <X className="h-4.5 w-4.5" />
         Fermer
       </button>
-      <video className="max-h-[85dvh] w-full max-w-5xl rounded-2xl object-contain shadow-2xl outline-none" src={src} controls autoPlay playsInline />
+      {isImageUrl(src) ? (
+        <img className="max-h-[85dvh] w-full max-w-5xl rounded-2xl object-contain shadow-2xl" src={src} alt="" />
+      ) : (
+        <video className="max-h-[85dvh] w-full max-w-5xl rounded-2xl object-contain shadow-2xl outline-none" src={src} controls autoPlay playsInline />
+      )}
     </div>
   );
 }

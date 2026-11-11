@@ -13,6 +13,10 @@ export const screenVersionCode = (s: Pick<AppScreen, 'player_version'>) => {
   return m ? Number(m[1]) : null;
 };
 
+/** Lecteur 1.6+ (code 7) : sait afficher des images dans la playlist. */
+export const IMAGE_MIN_CODE = 7;
+export const supportsImages = (s: Pick<AppScreen, 'player_version'>) => (screenVersionCode(s) ?? 0) >= IMAGE_MIN_CODE;
+
 /** Étape de mise à jour d'un écran, en clair. */
 export function updateStatus(s: AppScreen, online: boolean): { label: string; tone: 'done' | 'progress' | 'waiting' | 'failed' | 'offline' } {
   const target = s.latest_version_code || 0;
