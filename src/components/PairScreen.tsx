@@ -15,6 +15,7 @@ import {
   rememberWall,
   removeWaitingTv,
   waitForTv,
+  type PairTarget,
   type WaitingTv,
 } from '../lib/pairing';
 import type { AppScreen, Configuration, Group } from '../lib/types';
@@ -134,15 +135,17 @@ export default function PairScreen({
   const suggested = group && config && place ? cleanScreenName(`${group.name}${groupConfigs.length > 1 ? ` ${config.name}` : ''} ${place.n}`) : '';
   const finalName = occupant ? occupant.id : (nameTouched ? name : suggested).trim();
   const ready = !!tv && !!config && !!place && finalName.length >= 2;
-  const [donePlace, setDonePlace] = useState<number | null>(null);
-  const [lastName, setLastName] = useState('');
+  /**
+   * Cible figée au moment de « Connecter » : le rafraîchissement des écrans pendant l'attente
+   * (la nouvelle ligne occupe alors la place) ne doit rien changer. « Réessayer » repart d'elle.
+   */
+  const [target, setTarget] = useState<PairTarget & { n: number; previousBoot: string | null } | null>(null);
 
-  const connect = async () => {
-    if (!tv || !config || !place || !finalName) return;
-    const since = Date.now();
-    setPhase('connecting');
-    try {
-      await pairTv(code, {
+  const connect = async (retry = false) => {
+    let t = retry ? target : null;
+    if (!t) {
+      if (!tv || !config || !place || !finalName) return;
+      t = {
         name: finalName,
         replace: !!occupant,
         config,
@@ -154,22 +157,31 @@ export default function PairScreen({
         sibling: inConfig.find(s => s.id !== occupant?.id),
         rotation: canRotate && flipped ? 180 : 0,
         ownerId: group?.user_id ?? (isSuperAdmin ? null : userId),
-      });
+        n: place.n,
+        previousBoot: occupant?.booted_at ?? null,
+      };
+    } else {
+      // Réessai : l'écran existe déjà (créé au premier essai) → on renvoie seulement l'ordre à la TV.
+      t = { ...t, replace: true };
+    }
+    setTarget(t);
+    const since = Date.now();
+    setPhase('connecting');
+    try {
+      await pairTv(code, t);
       onChanged();
-      const ok = await waitForTv(finalName, since, cancelled.current);
+      const ok = await waitForTv(t.name, since, t.previousBoot, cancelled.current);
       if (cancelled.current.cancelled) return;
       if (ok) {
         await removeWaitingTv(code);
-        rememberWall(config.group_id, config.id);
+        if (t.config) rememberWall(t.config.group_id, t.config.id);
         // Confirmation sur la TV elle-même : son numéro de place s'affiche en grand.
-        if (canRotate) sendScreenCommand([finalName], 'identify').catch(() => undefined);
-        setDonePlace(place.n);
-        setLastName(finalName);
+        if (canRotate) sendScreenCommand([t.name], 'identify').catch(() => undefined);
         onChanged();
         setPhase('done');
       } else setPhase('timeout');
     } catch (err) {
-      setPhase('form');
+      setPhase(retry ? 'timeout' : 'form');
       toast(errorMessage(err), 'error');
     }
   };
@@ -182,7 +194,7 @@ export default function PairScreen({
     setName('');
     setNameTouched(false);
     setUpsideDown(null);
-    setDonePlace(null);
+    setTarget(null);
     setPhase('form');
   };
 
@@ -196,7 +208,7 @@ export default function PairScreen({
       title="Connecter une TV"
       footer={
         phase === 'form' && tv ? (
-          <Button block size="lg" icon={<Link2 className="h-5 w-5" />} disabled={!ready} onClick={connect}>
+          <Button block size="lg" icon={<Link2 className="h-5 w-5" />} disabled={!ready} onClick={() => connect()}>
             {occupant ? `Remplacer ${occupant.id}` : 'Connecter'}
           </Button>
         ) : phase === 'done' ? (
@@ -209,7 +221,7 @@ export default function PairScreen({
             </Button>
           </div>
         ) : phase === 'timeout' ? (
-          <Button block size="lg" icon={<RefreshCw className="h-5 w-5" />} onClick={connect}>
+          <Button block size="lg" icon={<RefreshCw className="h-5 w-5" />} onClick={() => connect(true)}>
             Réessayer
           </Button>
         ) : undefined
@@ -222,15 +234,15 @@ export default function PairScreen({
           </span>
           <p className="text-2xl font-extrabold text-ink">Connectée</p>
           <p className="text-sm font-semibold text-muted">
-            {lastName}
-            {donePlace ? ` · place ${donePlace}` : ''}
+            {target?.name}
+            {target ? ` · place ${target.n}` : ''}
           </p>
         </div>
       ) : phase === 'connecting' ? (
         <div className="flex flex-col items-center gap-3 py-10 text-center">
           <Loader2 className="h-10 w-10 animate-spin text-brand" />
           <p className="text-lg font-extrabold text-ink">Connexion…</p>
-          <p className="text-sm text-muted">{finalName}</p>
+          <p className="text-sm text-muted">{target?.name}</p>
         </div>
       ) : phase === 'timeout' ? (
         <div className="flex flex-col items-center gap-3 py-8 text-center">
@@ -383,6 +395,7 @@ export default function PairScreen({
             (occupant ? (
               <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
                 Cette TV prendra la place de « {occupant.id} » : même contenu, mêmes réglages.
+                {isOnline(occupant.last_ping, now) && <span className="mt-1 block font-extrabold">Débranchez l’ancienne TV : elle est encore en ligne.</span>}
               </p>
             ) : (
               <Input

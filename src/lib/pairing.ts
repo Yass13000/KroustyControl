@@ -82,12 +82,15 @@ export async function pairTv(code: string, t: PairTarget) {
 }
 
 /** Attend que la TV redémarre sous son nouveau nom (au plus ~75 s). */
-export async function waitForTv(name: string, since: number, signal: { cancelled: boolean }): Promise<boolean> {
+export async function waitForTv(name: string, since: number, previousBoot: string | null, signal: { cancelled: boolean }): Promise<boolean> {
+  const before = Date.parse(previousBoot || '') || 0;
   for (let i = 0; i < 30 && !signal.cancelled; i++) {
     await new Promise(r => setTimeout(r, 2500));
     const { data } = await sbClient.from('screens_config').select('booted_at').eq('id', name).maybeSingle();
     // Marge de 2 min : l'horloge de la TV peut être légèrement en retard sur celle du téléphone.
-    if ((Date.parse(data?.booted_at || '') || 0) > since - 120_000) return true;
+    // Remplacement : il faut un démarrage plus récent que celui de l'ancienne TV.
+    const boot = Date.parse(data?.booted_at || '') || 0;
+    if (boot > since - 120_000 && boot > before) return true;
   }
   return false;
 }
