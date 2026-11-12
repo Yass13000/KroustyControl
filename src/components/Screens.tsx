@@ -3,6 +3,7 @@ import { ArrowLeftRight, Camera, Check, ChevronLeft, Pencil, ChevronRight, Film,
 import { sbClient } from '../lib/supabase';
 import { errorMessage, must, mustAll, sendScreenCommand, useAccounts, useLibrary } from '../lib/data';
 import { screenVersionCode } from '../lib/playerRelease';
+import WeekCalendar from './WeekCalendar';
 import { FORMATS, fileNameFromUrl, isImageUrl, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from '../lib/media';
 import type { AppScreen, Configuration, Group, Profile } from '../lib/types';
 import { Badge, Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Select, Spinner, StatusDot, Switch, cn, useFeedback } from './ui';
@@ -133,10 +134,17 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
     }
   };
 
+  /** Renomme le mur ouvert, sinon le restaurant ouvert. */
   const saveGroupName = async () => {
     const name = (renaming || '').trim();
     const group = selectedGroup;
+    const config = selectedConfig;
     setRenaming(null);
+    if (config) {
+      if (!name || name === config.name) return;
+      await run(async () => must(await sbClient.from('configurations').update({ name }).eq('id', config.id)), 'Mur renommé');
+      return;
+    }
     if (!group || !name || name === group.name) return;
     await run(async () => must(await sbClient.from('groups').update({ name }).eq('id', group.id)), 'Restaurant renommé');
   };
@@ -700,9 +708,7 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
         }}
         size="lg"
         title={
-          selectedConfig ? (
-            selectedConfig.name
-          ) : renaming !== null ? (
+          renaming !== null ? (
             <form
               className="flex items-center gap-2"
               onSubmit={e => {
@@ -720,20 +726,22 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
                     setRenaming(null);
                   }
                 }}
-                aria-label="Nom du restaurant"
+                aria-label={selectedConfig ? 'Nom du mur' : 'Nom du restaurant'}
                 className="h-10 text-base font-bold"
               />
               <IconButton type="submit" label="Enregistrer le nom" variant="secondary" disabled={!renaming.trim()}>
                 <Check className="h-5 w-5 text-brand" />
               </IconButton>
             </form>
+          ) : selectedConfig ? (
+            selectedConfig.name
           ) : (
             selectedGroup?.name
           )
         }
         headerActions={
-          isSuperAdmin && selectedGroup && !selectedConfig && renaming === null ? (
-            <IconButton label="Renommer" onClick={() => setRenaming(selectedGroup.name)}>
+          isSuperAdmin && selectedGroup && renaming === null ? (
+            <IconButton label={selectedConfig ? 'Renommer le mur' : 'Renommer le restaurant'} onClick={() => setRenaming(selectedConfig ? selectedConfig.name : selectedGroup.name)}>
               <Pencil className="h-4.5 w-4.5" />
             </IconButton>
           ) : undefined
@@ -741,7 +749,14 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
         subtitle={selectedConfig ? selectedGroup?.name : undefined}
         leading={
           selectedConfig ? (
-            <IconButton label="Retour aux configurations" variant="secondary" onClick={() => setSelectedConfigId(null)}>
+            <IconButton
+              label="Retour aux configurations"
+              variant="secondary"
+              onClick={() => {
+                setSelectedConfigId(null);
+                setRenaming(null);
+              }}
+            >
               <ChevronLeft className="h-5 w-5" />
             </IconButton>
           ) : (
@@ -868,6 +883,7 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
               )}
             </div>
             {renderConfigGrid(selectedConfig)}
+            <WeekCalendar config={selectedConfig} group={selectedGroup} screens={screens.filter(scr => scr.configuration_id === selectedConfig.id)} />
           </div>
         )}
       </Modal>

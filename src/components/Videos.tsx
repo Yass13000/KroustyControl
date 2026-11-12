@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, CloudUpload, FileText, HardDrive, Image as ImageIcon, ChevronLeft, ChevronRight, ClipboardCopy, Copy, Film, FolderOpen, FolderPlus, Gauge, Link2, Loader2, MonitorPlay, Play, Plus, RefreshCw, Search, Trash2, Video, XCircle } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, CloudUpload, FileText, HardDrive, Image as ImageIcon, ChevronLeft, ChevronRight, ClipboardCopy, Copy, Film, FolderOpen, FolderPlus, Gauge, Link2, Loader2, Pencil, MonitorPlay, Play, Plus, RefreshCw, Search, Trash2, Video, XCircle } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
 import { errorMessage, must, useLibrary, useVideoAnalyses } from '../lib/data';
 import { IMAGE_SECONDS, fileExtension, googleDriveThumbnail, isGoogleDrive, isImageUrl, parsePlaylist, transformStorageUrl } from '../lib/media';
@@ -24,7 +24,7 @@ import {
 } from '../lib/videoAnalysis';
 import { formatDuration } from '../lib/diagnostics';
 import { DropboxSetupError, connectUrl, connectWithCode, spaceUsage, uploadVideo, type SetupState } from '../lib/dropbox';
-import { Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Select, Spinner, cn, useFeedback } from './ui';
+import { Button, EmptyState, Field, IconButton, Input, Modal, PageTitle, Segmented, Select, Spinner, cn, useFeedback } from './ui';
 
 interface VideosProps {
   isSuperAdmin: boolean;
@@ -440,13 +440,59 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
     }
   };
 
+  /* ------------------------------ Modifier un média / un dossier ------------------------------ */
+
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editAlbum, setEditAlbum] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+  const editVideo = videos.find(v => v.id === editId) || null;
+  const editChanged = !!editVideo && ((editName.trim() && editName.trim() !== editVideo.name) || editAlbum !== (editVideo.album_id || ''));
+
+  const openEdit = (v: VideoFile) => {
+    setEditId(v.id);
+    setEditName(v.name);
+    setEditAlbum(v.album_id || '');
+  };
+
+  const saveEdit = async () => {
+    if (!editVideo || !editChanged) return;
+    setSavingEdit(true);
+    try {
+      must(await sbClient.from('videos').update({ name: editName.trim() || editVideo.name, album_id: editAlbum || null }).eq('id', editVideo.id));
+      toast('Média modifié');
+      setEditId(null);
+      await refresh();
+    } catch (err) {
+      toast(errorMessage(err), 'error');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const [albumRename, setAlbumRename] = useState<string | null>(null);
+  const saveAlbumName = async () => {
+    const name = (albumRename || '').trim();
+    const album = activeAlbum;
+    setAlbumRename(null);
+    if (!album || !name || name === album.name) return;
+    try {
+      must(await sbClient.from('albums').update({ name }).eq('id', album.id));
+      toast('Dossier renommé');
+      await refresh();
+    } catch (err) {
+      toast(errorMessage(err), 'error');
+    }
+  };
+
   const handleDeleteVideo = async (video: VideoFile) => {
     if (!access.canManage(albumOf(video.album_id))) return;
     const ok = await confirm({ title: `Retirer « ${video.name} » ?`, confirmLabel: 'Retirer', danger: true });
     if (!ok) return;
     try {
       must(await sbClient.from('videos').delete().eq('id', video.id));
-      toast('Vidéo retirée');
+      setEditId(null);
+      toast('Média retiré');
       await refresh();
     } catch (err) {
       toast(errorMessage(err), 'error');
@@ -552,10 +598,9 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                     quality={qualityOf(v.url)}
                     format={formatOf(v)}
                     onInspect={() => setInspectId(v.id)}
-                    canDelete={access.canManage(albumOf(v.album_id))}
+                    canEdit={access.canManage(albumOf(v.album_id))}
                     onPlay={() => onPlayVideo(v.url)}
-                    onCopy={() => copyVideoLink(v.url)}
-                    onDelete={() => handleDeleteVideo(v)}
+                    onEdit={() => openEdit(v)}
                   />
                 ))}
               </div>
@@ -611,7 +656,29 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                 <ChevronLeft className="h-5 w-5" />
               </IconButton>
               <div className="min-w-0 flex-1">
-                <h2 className="truncate text-lg font-extrabold uppercase tracking-wide text-ink">{activeAlbum.name}</h2>
+                {albumRename !== null ? (
+                  <form
+                    className="flex items-center gap-2"
+                    onSubmit={e => {
+                      e.preventDefault();
+                      saveAlbumName();
+                    }}
+                  >
+                    <Input autoFocus value={albumRename} onChange={e => setAlbumRename(e.target.value)} aria-label="Nom du dossier" className="h-10 text-base font-bold" />
+                    <IconButton type="submit" label="Enregistrer le nom" variant="secondary" disabled={!albumRename.trim() || albumRename.trim() === activeAlbum.name}>
+                      <Check className="h-5 w-5 text-brand" />
+                    </IconButton>
+                  </form>
+                ) : (
+                  <h2 className="flex min-w-0 items-center gap-1 text-lg font-extrabold uppercase tracking-wide text-ink">
+                    <span className="truncate">{activeAlbum.name}</span>
+                    {access.canManage(activeAlbum) && (
+                      <IconButton label="Renommer le dossier" size="sm" onClick={() => setAlbumRename(activeAlbum.name)}>
+                        <Pencil className="h-4 w-4" />
+                      </IconButton>
+                    )}
+                  </h2>
+                )}
                 {showOwner && !isSuperAdmin && <p className="truncate text-xs text-muted">{ownerLabel(activeAlbum, groups)}</p>}
               </div>
               {isSuperAdmin && (
@@ -654,10 +721,9 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                     quality={qualityOf(v.url)}
                     format={formatOf(v)}
                     onInspect={() => setInspectId(v.id)}
-                    canDelete={access.canManage(albumOf(v.album_id))}
+                    canEdit={access.canManage(albumOf(v.album_id))}
                     onPlay={() => onPlayVideo(v.url)}
-                    onCopy={() => copyVideoLink(v.url)}
-                    onDelete={() => handleDeleteVideo(v)}
+                    onEdit={() => openEdit(v)}
                   />
                 ))}
               </div>
@@ -736,6 +802,66 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
           </Modal>
         );
       })()}
+
+      {/* ======================= MODIFIER UN MÉDIA ======================= */}
+      <Modal
+        open={!!editVideo}
+        onClose={() => setEditId(null)}
+        size="sm"
+        title={editVideo && access.canManage(albumOf(editVideo.album_id)) ? 'Modifier le média' : 'Média'}
+        footer={
+          editVideo &&
+          access.canManage(albumOf(editVideo.album_id)) && (
+            <Button
+              block
+              size="lg"
+              loading={savingEdit}
+              disabled={!editChanged}
+              icon={editChanged ? <Check className="h-5 w-5" strokeWidth={3} /> : undefined}
+              className={editChanged ? '' : '!bg-none !bg-sand !text-muted !opacity-100 !shadow-none'}
+              onClick={saveEdit}
+            >
+              {editChanged ? 'Valider' : 'Aucune modification'}
+            </Button>
+          )
+        }
+      >
+        {editVideo && (
+          <div className="space-y-4">
+            {access.canManage(albumOf(editVideo.album_id)) ? (
+              <>
+                <Field label="Nom" htmlFor="edit-name">
+                  <Input id="edit-name" value={editName} onChange={e => setEditName(e.target.value)} maxLength={80} />
+                </Field>
+                <Field label="Dossier" htmlFor="edit-album">
+                  <Select id="edit-album" value={editAlbum} onChange={e => setEditAlbum(e.target.value)}>
+                    {!editAlbum && <option value="">Sans dossier</option>}
+                    {albums
+                      .filter(a => access.canManage(a))
+                      .map(a => (
+                        <option key={a.id} value={a.id}>
+                          {a.name} · {ownerLabel(a, groups)}
+                        </option>
+                      ))}
+                  </Select>
+                </Field>
+              </>
+            ) : (
+              <p className="text-[15px] font-bold text-ink">{editVideo.name}</p>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" icon={<Copy className="h-4 w-4" />} onClick={() => copyVideoLink(editVideo.url)}>
+                Copier le lien
+              </Button>
+              {access.canManage(albumOf(editVideo.album_id)) && (
+                <Button variant="dangerSoft" icon={<Trash2 className="h-4 w-4" />} onClick={() => handleDeleteVideo(editVideo)}>
+                  Supprimer
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* ======================= MODALES ======================= */}
       <Modal
@@ -952,10 +1078,9 @@ function VideoCard({
   quality,
   format,
   onInspect,
-  canDelete,
+  canEdit,
   onPlay,
-  onCopy,
-  onDelete,
+  onEdit,
 }: {
   video: VideoFile;
   albumLabel?: string;
@@ -963,10 +1088,9 @@ function VideoCard({
   quality?: Assessment['verdict'] | 'pending';
   format?: { format: string | null; source: FormatSource | null };
   onInspect: () => void;
-  canDelete: boolean;
+  canEdit: boolean;
   onPlay: () => void;
-  onCopy: () => void;
-  onDelete: () => void;
+  onEdit: () => void;
 }) {
   return (
     <div className="card group overflow-hidden p-2">
@@ -1021,14 +1145,9 @@ function VideoCard({
         </button>
         )}
         <div className="absolute right-1.5 top-1.5 flex gap-1">
-          <IconButton label="Copier le lien" size="sm" variant="onDark" onClick={onCopy}>
-            <Copy className="h-3.5 w-3.5" />
+          <IconButton label={canEdit ? `Modifier ${video.name}` : `Détails de ${video.name}`} size="sm" variant="onDark" onClick={onEdit}>
+            <Pencil className="h-3.5 w-3.5" />
           </IconButton>
-          {canDelete && (
-            <IconButton label={`Retirer ${video.name}`} size="sm" variant="onDark" onClick={onDelete}>
-              <Trash2 className="h-3.5 w-3.5" />
-            </IconButton>
-          )}
         </div>
       </div>
       <div className="min-w-0 px-1 pt-2">

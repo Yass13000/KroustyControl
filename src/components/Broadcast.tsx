@@ -13,7 +13,6 @@ import {
   Moon,
   Music2,
   Plus,
-  Rocket,
   Search,
   Sun,
   Trash2,
@@ -193,6 +192,57 @@ export default function Broadcast({
 
   const hasEdits = activeEdits.schedule || activeEdits.audio || activeEdits.video;
 
+  /**
+   * Ce qui changerait réellement sur les écrans (comparé à ce qui est enregistré) :
+   * le bouton « Valider » ne s'allume que dans ce cas, et dit quoi.
+   */
+  const pendingChanges = (() => {
+    const changes: string[] = [];
+    if (selectedCount === 0) return changes;
+    const src = targetConfigIds[0];
+    const targets = targetConfigIds.map(id => configurations.find(c => c.id === id)).filter((c): c is Configuration => !!c);
+    const screensOf = (c: Configuration) => screens.filter(s => s.configuration_id === c.id);
+
+    if (activeEdits.schedule) {
+      const sch = scheduleInputs[src];
+      const groupIds = new Set(targets.map(c => c.group_id));
+      const differs =
+        !!sch &&
+        ([...groupIds].some(gid => {
+          const g = groupById.get(gid);
+          return hhmm(g?.open_time, '08:00') !== sch.open || hhmm(g?.close_time, '22:00') !== sch.close;
+        }) ||
+          screens.some(s => {
+            const c = s.configuration_id ? configurations.find(x => x.id === s.configuration_id) : undefined;
+            return !!c && groupIds.has(c.group_id) && (hhmm(s.opening_time, '') !== sch.open || hhmm(s.closing_time, '') !== sch.close);
+          }));
+      if (differs) changes.push('Horaires');
+    }
+
+    if (activeEdits.audio) {
+      const audio = transformStorageUrl((attributionInputs[audioKeyOf(src)] || '').trim());
+      const differs = targets.some(c => {
+        const master = screensOf(c).find(s => s.pos_x === 0 && s.pos_y === 0);
+        return !!master && (master.audio_url || '') !== audio;
+      });
+      if (differs) changes.push('Musique');
+    }
+
+    if (activeEdits.video) {
+      const globalUrl = transformStorageUrl((attributionInputs[globalVideoKeyOf(src)] || '').trim());
+      const differs = targets.some(c => {
+        const perScreen = selectedCount === 1 && (groupModes[c.id] || 'global') === 'per-screen';
+        return screensOf(c).some(s => {
+          const target = perScreen ? transformStorageUrl((attributionInputs[screenVideoKeyOf(s.id)] || '').trim()) : globalUrl;
+          return (s.video_url || '') !== target;
+        });
+      });
+      if (differs) changes.push('Playlist');
+    }
+    return changes;
+  })();
+  const canValidate = pendingChanges.length > 0;
+
   /** Écrans qui recevraient une playlist avec des images alors que leur lecteur ne sait pas les afficher. */
   const screensBlockedByImages = () => {
     if (!activeEdits.video) return [];
@@ -210,7 +260,7 @@ export default function Broadcast({
   };
 
   const applyConfig = async () => {
-    if (isSaving || selectedCount === 0 || !hasEdits) return;
+    if (isSaving || selectedCount === 0 || !hasEdits || !canValidate) return;
     // Un ancien lecteur ne sait pas afficher une image : il resterait bloqué en erreur.
     const blocked = screensBlockedByImages();
     if (blocked.length > 0) {
@@ -296,7 +346,9 @@ export default function Broadcast({
         }
       }
 
-      toast('Déployé');
+      toast(`Validé · ${pendingChanges.join(', ')}`);
+      // Tout est enregistré : plus rien à valider.
+      setActiveEdits({ schedule: false, audio: false, video: false });
       onSaved();
     } catch (err) {
       console.error(err);
@@ -398,6 +450,7 @@ export default function Broadcast({
       icon={<Clock className="h-4.5 w-4.5" />}
       title={title}
       enabled={activeEdits.schedule}
+      changed={pendingChanges.includes('Horaires')}
       onToggle={v => setEdit('schedule', v)}
     >
       <div className="grid grid-cols-2 gap-3">
@@ -424,6 +477,7 @@ export default function Broadcast({
       icon={<Music2 className="h-4.5 w-4.5" />}
       title={title}
       enabled={activeEdits.audio}
+      changed={pendingChanges.includes('Musique')}
       onToggle={v => setEdit('audio', v)}
     >
       <Input
@@ -497,6 +551,7 @@ export default function Broadcast({
             icon={<Film className="h-4.5 w-4.5" />}
             title="Playlist"
             enabled={activeEdits.video}
+            changed={pendingChanges.includes('Playlist')}
             onToggle={v => setEdit('video', v)}
             extra={
               <Segmented
@@ -541,6 +596,7 @@ export default function Broadcast({
             icon={<Film className="h-4.5 w-4.5" />}
             title="Playlist"
             enabled={activeEdits.video}
+            changed={pendingChanges.includes('Playlist')}
             onToggle={v => setEdit('video', v)}
           >
             {renderPlaylist(globalVideoKeyOf(baseId), '')}
@@ -672,10 +728,18 @@ export default function Broadcast({
 
           {workspace}
 
-          {selectedCount > 0 && hasEdits && (
-            <div className="sticky bottom-28 z-30 pt-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
-              <Button size="lg" block onClick={applyConfig} loading={isSaving} disabled={!hasEdits} icon={<Rocket className="h-5 w-5" />} className="shadow-lift">
-                Déployer
+          {selectedCount > 0 && (
+            <div className="sticky bottom-28 z-30 pt-2">
+              <Button
+                size="lg"
+                block
+                onClick={applyConfig}
+                loading={isSaving}
+                disabled={!canValidate}
+                icon={canValidate ? <Check className="h-5 w-5" strokeWidth={3} /> : undefined}
+                className={cn('transition-all', canValidate ? 'shadow-lift' : '!bg-none !bg-sand !text-muted !opacity-100 !shadow-none')}
+              >
+                {canValidate ? `Valider · ${pendingChanges.join(', ')}` : 'Aucune modification'}
               </Button>
             </div>
           )}
@@ -792,6 +856,7 @@ function EditSection({
   title,
   description,
   enabled,
+  changed,
   onToggle,
   extra,
   children,
@@ -800,6 +865,8 @@ function EditSection({
   title: string;
   description?: string;
   enabled: boolean;
+  /** La valeur diffère vraiment de ce qui est enregistré sur les écrans. */
+  changed?: boolean;
   onToggle: (v: boolean) => void;
   extra?: ReactNode;
   children: ReactNode;
@@ -812,7 +879,7 @@ function EditSection({
           <p className="text-[15px] font-bold text-ink">{title}</p>
           {description && <p className="text-xs text-muted">{description}</p>}
         </div>
-        <span className={cn('text-xs font-bold', enabled ? 'text-brand-800' : 'text-muted')}>{enabled ? 'Modifié' : 'Modifier'}</span>
+        <span className={cn('text-xs font-bold', changed ? 'text-brand-800' : 'text-muted')}>{changed ? 'Modifié' : 'Modifier'}</span>
         <Switch checked={enabled} onChange={onToggle} label={`Modifier : ${title}`} />
       </div>
       {extra && <div>{extra}</div>}
