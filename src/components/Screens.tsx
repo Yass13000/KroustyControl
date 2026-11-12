@@ -643,6 +643,8 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
             const configIds = new Set(configurations.filter(c => c.group_id === group.id).map(c => c.id));
             const inGroup = screens.filter(s => s.configuration_id && configIds.has(s.configuration_id));
             const onlineCount = inGroup.filter(online).length;
+            const walls = configIds.size;
+            const dot = inGroup.length === 0 ? 'bg-white/40' : onlineCount === inGroup.length ? 'bg-emerald-400' : onlineCount === 0 ? 'bg-red-500' : 'bg-amber-400';
 
             return (
               <button
@@ -652,7 +654,7 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
                   setSelectedGroupId(group.id);
                   setSelectedConfigId(null);
                 }}
-                className="group relative flex aspect-square w-full flex-col justify-end overflow-hidden rounded-3xl bg-gradient-to-br from-brand to-brand-800 p-4 text-left shadow-card transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lift active:scale-[0.98]"
+                className="group relative flex aspect-[4/3] w-full flex-col justify-end overflow-hidden rounded-3xl bg-gradient-to-br from-brand to-brand-800 p-4 text-left shadow-card transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lift active:scale-[0.98]"
               >
                 {group.image_url && (
                   <img
@@ -667,9 +669,19 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
 
                 <div className="relative z-10">
                   <h3 className="line-clamp-2 text-base font-extrabold uppercase leading-tight text-white drop-shadow sm:text-lg">{group.name}</h3>
-                  <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-sm font-bold tabular-nums text-white backdrop-blur" title="En ligne">
-                    <StatusDot online={onlineCount > 0} className="h-2 w-2" />
-                    {onlineCount}
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span
+                      className="inline-flex items-center gap-1.5 rounded-full bg-black/45 px-2.5 py-1 text-sm font-bold tabular-nums text-white backdrop-blur"
+                      title={`${onlineCount} écran${onlineCount > 1 ? 's' : ''} en ligne sur ${inGroup.length}`}
+                    >
+                      <span className={cn('h-2 w-2 rounded-full', dot)} />
+                      {inGroup.length ? `${onlineCount}/${inGroup.length}` : 'Aucun écran'}
+                    </span>
+                    {walls > 0 && (
+                      <span className="rounded-full bg-black/30 px-2 py-1 text-xs font-bold text-white/85 backdrop-blur">
+                        {walls} mur{walls > 1 ? 's' : ''}
+                      </span>
+                    )}
                   </div>
                 </div>
               </button>

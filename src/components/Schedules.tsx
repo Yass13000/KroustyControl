@@ -24,7 +24,7 @@ interface Schedule {
   last_applied_at: string | null;
 }
 
-const DAYS = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+const DAYS = ['Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa', 'Di'];
 const DAY_NAMES = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
 const hhmm = (t: string) => (t || '').slice(0, 5);
 const toMin = (t: string) => {
@@ -201,7 +201,7 @@ export default function Schedules({
                       aria-label={DAY_NAMES[i]}
                       title={DAY_NAMES[i]}
                       onClick={() => save(s.id, { days: on ? s.days.filter(x => x !== day) : [...s.days, day].sort() })}
-                      className={cn('h-8 w-8 rounded-lg text-xs font-black transition', on ? 'bg-brand text-white' : 'bg-cream text-muted hover:bg-sand')}
+                      className={cn('h-8 w-8 rounded-lg text-[11px] font-black transition', on ? 'bg-brand text-white' : 'bg-cream text-muted hover:bg-sand')}
                     >
                       {d}
                     </button>

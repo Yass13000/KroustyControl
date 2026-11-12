@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
-import { AlertCircle, Clapperboard, House, Moon, Rocket, Stethoscope, Eye, EyeOff, Lock, LogOut, Mail, Monitor, MonitorPlay, RotateCcw, ShieldCheck, X } from 'lucide-react';
+import { AlertCircle, Clapperboard, House, Moon, Rocket, Stethoscope, Eye, EyeOff, Lock, LogOut, Mail, MonitorPlay, RotateCcw, X } from 'lucide-react';
 import { sbAuth } from './lib/supabase';
 import { clearSharedCaches, useFleetData, useNow } from './lib/data';
 import { isImageUrl, isOnline } from './lib/media';
@@ -249,9 +249,10 @@ export function Main({ user }: { user: User }) {
           <SynkLogo variant="onBrand" className="w-[104px] flex-shrink-0 md:w-[132px]" />
 
           <div className="ml-auto inline-flex items-center gap-2.5 rounded-full bg-black/15 px-3 py-1.5 text-[13px] font-bold tabular-nums text-white">
-            <span className="inline-flex items-center gap-1.5" title="En ligne">
+            <span className="inline-flex items-center gap-1.5" title="Écrans en ligne">
               <span className={cn('h-2 w-2 rounded-full', onlineScreens > 0 ? 'bg-emerald-300 pulse-online' : 'bg-white/50')} />
-              {onlineScreens}
+              {onlineScreens + sleepingScreens}/{totalScreens}
+              <span className="font-semibold text-white/80">en ligne</span>
             </span>
             {sleepingScreens > 0 && (
               <span className="inline-flex items-center gap-1" title="En veille">
@@ -259,11 +260,7 @@ export function Main({ user }: { user: User }) {
                 {sleepingScreens}
               </span>
             )}
-            <span className="inline-flex items-center gap-1 text-white/75" title="Écrans">
-              <Monitor className="h-3.5 w-3.5" />
-              {totalScreens}
-            </span>
-            {fleet.isSuperAdmin && <ShieldCheck className="h-3.5 w-3.5 text-white/90" aria-label="Admin" />}
+
           </div>
 
           <button
@@ -382,7 +379,7 @@ export function Main({ user }: { user: User }) {
           label="Diffuser"
         />
         <NavButton active={tab === 'appareils'} onClick={() => setActiveTab('appareils')} icon={<MonitorPlay className="h-5 w-5" />} label="Écrans" />
-        <NavButton active={tab === 'bibliotheque'} onClick={() => setActiveTab('bibliotheque')} icon={<Clapperboard className="h-5 w-5" />} label="Vidéos" />
+        <NavButton active={tab === 'bibliotheque'} onClick={() => setActiveTab('bibliotheque')} icon={<Clapperboard className="h-5 w-5" />} label="Médias" />
         {fleet.isSuperAdmin && (
           <NavButton
             active={tab === 'maintenance'}

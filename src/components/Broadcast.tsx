@@ -495,7 +495,7 @@ export default function Broadcast({
 
           <EditSection
             icon={<Film className="h-4.5 w-4.5" />}
-            title="Vidéos"
+            title="Playlist"
             enabled={activeEdits.video}
             onToggle={v => setEdit('video', v)}
             extra={
@@ -539,7 +539,7 @@ export default function Broadcast({
 
           <EditSection
             icon={<Film className="h-4.5 w-4.5" />}
-            title="Vidéos"
+            title="Playlist"
             enabled={activeEdits.video}
             onToggle={v => setEdit('video', v)}
           >
@@ -609,7 +609,7 @@ export default function Broadcast({
                   </div>
                   {filteredConfigs.length > 0 && (
                     <Button size="sm" variant="ghost" onClick={allSelected ? () => setSelectedConfigs({}) : selectAllFiltered}>
-                      {allSelected ? 'Aucun' : 'Tout'}
+                      {allSelected ? 'Tout décocher' : 'Tout cocher'}
                     </Button>
                   )}
                 </div>
@@ -647,11 +647,20 @@ export default function Broadcast({
                           </span>
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-sm font-bold text-ink">{groupById.get(config.group_id)?.name}</span>
-                            <span className="block truncate text-xs text-muted">{config.name}</span>
+                            <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted">
+                              <span className="flex-shrink-0 rounded-md bg-sand px-1.5 py-px text-[11px] font-black text-ink">{config.format}</span>
+                              <span className="truncate">{config.name}</span>
+                            </span>
                           </span>
-                          <span className="flex flex-shrink-0 items-center gap-1.5 text-sm font-bold tabular-nums text-ink" title="En ligne">
+                          <span
+                            className={cn(
+                              'flex flex-shrink-0 items-center gap-1.5 text-sm font-bold tabular-nums',
+                              inConfig.length === 0 ? 'text-muted' : online === inConfig.length ? 'text-emerald-700' : online === 0 ? 'text-red-600' : 'text-amber-700',
+                            )}
+                            title={`${online} écran${online > 1 ? 's' : ''} en ligne sur ${inConfig.length}`}
+                          >
                             <StatusDot online={online > 0} className="h-2 w-2" />
-                            {online}
+                            {online}/{inConfig.length}
                           </span>
                         </button>
                       );
@@ -803,11 +812,16 @@ function EditSection({
           <p className="text-[15px] font-bold text-ink">{title}</p>
           {description && <p className="text-xs text-muted">{description}</p>}
         </div>
+        <span className={cn('text-xs font-bold', enabled ? 'text-brand-800' : 'text-muted')}>{enabled ? 'Modifié' : 'Modifier'}</span>
         <Switch checked={enabled} onChange={onToggle} label={`Modifier : ${title}`} />
       </div>
       {extra && <div>{extra}</div>}
-      <div className={cn('transition-opacity', !enabled && 'pointer-events-none opacity-45')} aria-disabled={!enabled}>
-        {children}
+      <div className="relative">
+        {/* Désactivé : valeurs lisibles ; un toucher active la modification. */}
+        <div className={cn('transition-opacity', !enabled && 'opacity-70')} aria-disabled={!enabled}>
+          {children}
+        </div>
+        {!enabled && <button type="button" className="absolute inset-0 rounded-2xl" aria-label={`Modifier : ${title}`} onClick={() => onToggle(true)} />}
       </div>
     </div>
   );
@@ -816,14 +830,14 @@ function EditSection({
 function TimeField({ label, icon, value, onChange, disabled }: { label: string; icon: ReactNode; value: string; onChange: (v: string) => void; disabled?: boolean }) {
   return (
     <label className="relative block" title={label}>
-      <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2">{icon}</span>
+      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2">{icon}</span>
       <span className="sr-only">{label}</span>
       <input
         type="time"
         value={value}
         disabled={disabled}
         onChange={e => onChange(e.target.value)}
-        className="h-12 w-full cursor-pointer rounded-2xl border border-line bg-white pl-10 pr-3 text-base font-bold tabular-nums text-ink outline-none transition focus:border-brand focus:ring-4 focus:ring-brand/15"
+        className="h-12 w-full min-w-0 cursor-pointer rounded-2xl border border-line bg-white pl-9 pr-1.5 text-[15px] font-bold tabular-nums text-ink outline-none transition focus:border-brand focus:ring-4 focus:ring-brand/15 [&::-webkit-calendar-picker-indicator]:ml-0.5 [&::-webkit-calendar-picker-indicator]:opacity-50"
       />
     </label>
   );

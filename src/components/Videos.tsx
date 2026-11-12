@@ -467,7 +467,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   return (
     <div className="space-y-5">
       <PageTitle
-        title="Vidéos"
+        title="Médias"
         actions={
           access.canCreate && (
             <IconButton label="Nouveau dossier" variant="secondary" onClick={() => setShowCreateAlbum(true)}>
@@ -584,9 +584,11 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                   <AlbumCover videos={list} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[15px] font-extrabold uppercase tracking-wide text-ink transition group-hover:text-brand-800">{album.name}</span>
-                    {showOwner && <span className="block truncate text-xs text-muted">{ownerLabel(album, groups)}</span>}
+                    <span className="block truncate text-xs text-muted">
+                      {showOwner && `${ownerLabel(album, groups)} · `}
+                      <span className="font-bold tabular-nums">{list.length}</span> média{list.length > 1 ? 's' : ''}
+                    </span>
                   </span>
-                  <span className="text-sm font-bold tabular-nums text-muted">{list.length}</span>
                   <ChevronRight className="h-5 w-5 flex-shrink-0 text-muted transition group-hover:translate-x-0.5" />
                 </button>
                 {access.canManage(album) && (
@@ -628,7 +630,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                 </Select>
               )}
               {access.canManage(activeAlbum) && (
-                <IconButton label="Ajouter une vidéo" variant="secondary" onClick={() => setAddVideoAlbumId(activeAlbum.id)}>
+                <IconButton label="Ajouter un média" variant="secondary" onClick={() => setAddVideoAlbumId(activeAlbum.id)}>
                   <Plus className="h-5 w-5" />
                 </IconButton>
               )}
@@ -974,10 +976,11 @@ function VideoCard({
           type="button"
           onClick={onPlay}
           aria-label={`Lire ${video.name}`}
-          className="absolute inset-0 flex items-center justify-center bg-black/10 transition hover:bg-black/25"
+          className="absolute inset-0 bg-black/0 transition hover:bg-black/20"
         >
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-white/95 shadow-lg transition group-hover:scale-110">
-            <Play className="ml-0.5 h-4 w-4 fill-brand text-brand" />
+          {/* Petit badge dans le coin : ne recouvre plus les boutons copier / supprimer. */}
+          <span className="absolute bottom-1.5 right-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-white/95 shadow-md transition group-hover:scale-110">
+            <Play className="ml-0.5 h-3.5 w-3.5 fill-brand text-brand" />
           </span>
         </button>
         {usedOn.length > 0 && (
@@ -1079,8 +1082,14 @@ function AlbumCover({ videos }: { videos: VideoFile[] }) {
       {videos.length > 1 && <span className="absolute inset-0 translate-x-1.5 translate-y-1 rotate-3 rounded-xl border border-sand bg-brand-800/15" />}
       {videos.length > 0 && <span className="absolute inset-0 -rotate-2 rounded-xl border border-sand bg-brand/10" />}
       <span className="absolute inset-0 overflow-hidden rounded-xl border border-line bg-cream shadow-sm">
+        {/* Icône de fond : visible tant que l'aperçu n'est pas chargé (ou indisponible). */}
+        <span className="absolute inset-0 flex items-center justify-center text-brand/30">
+          <FolderOpen className="h-6 w-6" />
+        </span>
         {cover ? (
-          <VideoThumb video={cover} />
+          <span className="relative block h-full w-full">
+            <VideoThumb video={cover} />
+          </span>
         ) : (
           <span className="flex h-full w-full items-center justify-center text-brand/40">
             <FolderOpen className="h-6 w-6" />

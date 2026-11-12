@@ -172,6 +172,30 @@ export default function Maintenance({ groups, configurations, screens, onChanged
     info: issues.filter(i => i.severity === 'info').length,
   };
   const visibleIssues = filter === 'all' ? issues : issues.filter(i => i.severity === filter);
+  // Lignes de la liste : problèmes identiques (sans réparation) regroupés, dans l'ordre de gravité.
+  type IssueRow = { kind: 'one'; issue: Issue } | { kind: 'group'; key: string; title: string; severity: Severity; items: Issue[] };
+  const issueRows = useMemo<IssueRow[]>(() => {
+    const rows: IssueRow[] = [];
+    const groupsByKey = new Map<string, Issue[]>();
+    for (const i of visibleIssues) {
+      if (i.fixable || !i.screenId) continue;
+      const key = `${i.severity}|${i.title}`;
+      groupsByKey.set(key, [...(groupsByKey.get(key) || []), i]);
+    }
+    const placed = new Set<string>();
+    for (const i of visibleIssues) {
+      const key = `${i.severity}|${i.title}`;
+      const group = !i.fixable && i.screenId ? groupsByKey.get(key) : undefined;
+      if (group && group.length > 1) {
+        if (placed.has(key)) continue;
+        placed.add(key);
+        rows.push({ kind: 'group', key, title: i.title, severity: i.severity, items: group });
+      } else {
+        rows.push({ kind: 'one', issue: i });
+      }
+    }
+    return rows;
+  }, [visibleIssues]);
   const onlineCount = screens.filter(s => isOnline(s.last_ping, now)).length;
   const mediaValues = allUrls.map(u => media[u]).filter(Boolean);
   const mediaOk = mediaValues.filter(m => m.state === 'ok').length;
@@ -494,17 +518,45 @@ export default function Maintenance({ groups, configurations, screens, onChanged
           <EmptyState icon={<CheckCircle2 className="h-6 w-6" />} title="Rien à signaler" />
         ) : (
           <ul className="card divide-y divide-sand overflow-hidden">
-            {visibleIssues.map(issue => {
+            {issueRows.map(row => {
+              // Même problème sur plusieurs écrans : une seule ligne, écrans en pastilles.
+              if (row.kind === 'group') {
+                const ui = SEVERITY_UI[row.severity];
+                return (
+                  <li key={row.key} className="flex items-start gap-3 p-3.5">
+                    <span className={cn('mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl', ui.tone)}>{ui.icon}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[15px] font-bold text-ink">
+                        {row.title}
+                        <span className="ml-1.5 text-muted">· {row.items.length}</span>
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {row.items.map(i => (
+                          <button
+                            key={i.id}
+                            type="button"
+                            onClick={() => i.screenId && setOpenScreenId(i.screenId)}
+                            title={i.detail}
+                            className="inline-flex max-w-full items-center gap-1 rounded-lg bg-sand px-2 py-1 text-xs font-extrabold text-ink transition hover:bg-brand-50 hover:text-brand-800"
+                          >
+                            <span className="truncate">{i.screenId}</span>
+                            <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-muted" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </li>
+                );
+              }
+              const issue = row.issue;
               const ui = SEVERITY_UI[issue.severity];
               const fixes = issue.fixable ? fixesFor(issue) : [];
               return (
                 <li key={issue.id} className="flex items-start gap-3 p-3.5">
                   <span className={cn('mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl', ui.tone)}>{ui.icon}</span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-[15px] font-bold text-ink">
-                      {issue.screenId && <span className="mr-1.5 rounded-md bg-sand px-1.5 py-0.5 text-xs font-extrabold text-ink">{issue.screenId}</span>}
-                      {issue.title}
-                    </p>
+                    {issue.screenId && <p className="truncate text-xs font-extrabold uppercase tracking-wide text-muted">{issue.screenId}</p>}
+                    <p className="text-[15px] font-bold leading-snug text-ink">{issue.title}</p>
                     <p className="mt-0.5 break-words text-sm text-muted">{issue.detail}</p>
                     {fixes.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1.5">

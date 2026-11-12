@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react';
-import { Activity, CalendarClock, ChevronRight, Clapperboard, MonitorPlay, Rocket, Stethoscope, Store, Upload } from 'lucide-react';
+import { Activity, AlertTriangle, CalendarClock, ChevronRight, Clapperboard, Film, LayoutGrid, Moon, MonitorPlay, Power, Rocket, Send, Stethoscope, Store, Upload, WifiOff, type LucideIcon } from 'lucide-react';
+import { commandLabel } from '../lib/diagnostics';
 import { useLibrary, useScreenEvents } from '../lib/data';
 import { libraryAccess } from '../lib/library';
 import { isImageUrl, isOnline, parseFormat, parsePlaylist, timeAgo } from '../lib/media';
@@ -86,7 +87,7 @@ export default function Dashboard({ displayName, groups, configurations, screens
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat icon={<Store className="h-5 w-5" />} value={groups.length} label="Restaurants" onClick={() => onNavigate('appareils')} />
         <Stat icon={<MonitorPlay className="h-5 w-5" />} value={screens.length} label="Écrans" onClick={() => onNavigate('appareils')} />
-        <Stat icon={<Clapperboard className="h-5 w-5" />} value={videoCount} label="Vidéos" onClick={() => onNavigate('bibliotheque')} />
+        <Stat icon={<Clapperboard className="h-5 w-5" />} value={videoCount} label="Médias" onClick={() => onNavigate('bibliotheque')} />
         <Stat icon={<Rocket className="h-5 w-5" />} value={playingUrls.size} label="En diffusion" onClick={() => onNavigate('accueil')} />
       </section>
 
@@ -128,7 +129,7 @@ export default function Dashboard({ displayName, groups, configurations, screens
       {/* --- Raccourcis --- */}
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Action icon={<Rocket className="h-5 w-5" />} label="Diffuser" tone="brand" onClick={() => onNavigate('accueil')} />
-        <Action icon={<Upload className="h-5 w-5" />} label="Ajouter une vidéo" onClick={() => onNavigate('bibliotheque')} />
+        <Action icon={<Upload className="h-5 w-5" />} label="Ajouter un média" onClick={() => onNavigate('bibliotheque')} />
         <Action icon={<CalendarClock className="h-5 w-5" />} label="Programmer" onClick={() => onNavigate('accueil')} />
         {isSuperAdmin ? (
           <Action icon={<Stethoscope className="h-5 w-5" />} label="Maintenance" onClick={() => onNavigate('maintenance')} alert={criticalCount > 0} />
@@ -146,7 +147,7 @@ export default function Dashboard({ displayName, groups, configurations, screens
           <ul className="card divide-y divide-sand overflow-hidden">
             {recent.map(e => (
               <li key={e.id} className="flex items-center gap-3 px-4 py-3 text-sm">
-                <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', EVENT_DOT[e.kind])} />
+                <EventIcon e={e} />
                 <span className="min-w-0 flex-1 truncate">
                   <span className="font-bold text-ink">{e.screen_id}</span> <span className="text-muted">{eventText(e)}</span>
                 </span>
@@ -162,22 +163,53 @@ export default function Dashboard({ displayName, groups, configurations, screens
 
 /* ================================ Sous-composants ================================ */
 
-const EVENT_DOT: Record<ScreenEvent['kind'], string> = {
-  outage: 'bg-red-500',
-  boot: 'bg-sky-500',
-  error: 'bg-amber-500',
-  command: 'bg-violet-500',
-  content: 'bg-brand',
-  assign: 'bg-muted',
-  power: 'bg-indigo-400',
+/** Icône colorée par type d'événement (même langage visuel que Suivi). */
+const EVENT_UI: Record<ScreenEvent['kind'], { icon: LucideIcon; tone: string }> = {
+  outage: { icon: WifiOff, tone: 'bg-red-50 text-red-600' },
+  boot: { icon: Power, tone: 'bg-sky-50 text-sky-600' },
+  error: { icon: AlertTriangle, tone: 'bg-amber-50 text-amber-600' },
+  command: { icon: Send, tone: 'bg-violet-50 text-violet-600' },
+  content: { icon: Film, tone: 'bg-brand-50 text-brand-700' },
+  assign: { icon: LayoutGrid, tone: 'bg-sand text-muted' },
+  power: { icon: Moon, tone: 'bg-indigo-50 text-indigo-500' },
 };
 
+function EventIcon({ e }: { e: ScreenEvent }) {
+  const ui = EVENT_UI[e.kind] ?? EVENT_UI.assign;
+  const Icon = e.kind === 'power' && e.message === 'Réveil' ? Power : ui.icon;
+  return (
+    <span className={cn('flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full', ui.tone)}>
+      <Icon className="h-3.5 w-3.5" />
+    </span>
+  );
+}
+
+/** Événement en clair (le journal stocke des messages techniques). */
 function eventText(e: ScreenEvent) {
-  if (e.kind === 'outage' && e.started_at) {
-    const m = Math.max(1, Math.round((new Date(e.created_at).getTime() - new Date(e.started_at).getTime()) / 60000));
-    return `coupure de ${m < 60 ? `${m} min` : `${Math.round(m / 60)} h`}`;
+  const msg = e.message || '';
+  switch (e.kind) {
+    case 'outage': {
+      if (!e.started_at) return 'coupure';
+      const m = Math.max(1, Math.round((new Date(e.created_at).getTime() - new Date(e.started_at).getTime()) / 60000));
+      return `coupure de ${m < 60 ? `${m} min` : `${Math.round(m / 60)} h`}`;
+    }
+    case 'boot': {
+      // « 1.6 (7) · IIYAMA LH3260HS-B1AG » → « a démarré · lecteur 1.6 »
+      const version = msg.match(/^(\d+(?:\.\d+)+)/)?.[1];
+      return version ? `a démarré · lecteur ${version}` : 'a démarré';
+    }
+    case 'command': {
+      const [state, cmd] = msg.split(' : ');
+      const label = commandLabel(cmd).toLowerCase();
+      return state === 'Exécutée' ? `${label} · fait` : `${label} · envoyé`;
+    }
+    case 'power':
+      return msg === 'Réveil' ? 'réveil' : 'mise en veille';
+    case 'error':
+      return `erreur · ${msg.toLowerCase()}`;
+    default:
+      return msg.toLowerCase() || e.kind;
   }
-  return (e.message || e.kind).toLowerCase();
 }
 
 /** Anneau d'état : en ligne / en veille / hors ligne. */
