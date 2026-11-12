@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { AlertCircle, Clapperboard, House, Moon, Rocket, Stethoscope, Eye, EyeOff, Lock, LogOut, Mail, Monitor, MonitorPlay, RotateCcw, ShieldCheck, X } from 'lucide-react';
 import { sbAuth } from './lib/supabase';
-import { useFleetData, useNow } from './lib/data';
+import { clearSharedCaches, useFleetData, useNow } from './lib/data';
 import { isImageUrl, isOnline } from './lib/media';
 import type { GroupMode } from './lib/types';
 import Broadcast from './components/Broadcast';
@@ -215,7 +215,10 @@ export function Main({ user }: { user: User }) {
 
   const handleLogout = async () => {
     const ok = await confirm({ title: 'Se déconnecter ?', confirmLabel: 'Déconnexion' });
-    if (ok) await sbAuth.auth.signOut();
+    if (ok) {
+      await sbAuth.auth.signOut();
+      clearSharedCaches();
+    }
   };
 
   const hardRefresh = async () => {

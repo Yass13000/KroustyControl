@@ -1,10 +1,124 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import type { User } from '@supabase/supabase-js';
+import type { RealtimeChannel, User } from '@supabase/supabase-js';
 import { sbClient } from './supabase';
 import { analyzeVideo, readCache, writeCache, type VideoAnalysis } from './videoAnalysis';
 import { isPairingId, isPairingRow } from './pairingIds';
 import { isImageUrl } from './media';
 import type { Album, AppScreen, Configuration, Group, Profile, ScreenCommand, ScreenEvent, VideoFile } from './types';
+
+/* ------------------------------ Économie de requêtes ------------------------------ */
+
+const SHARED_TTL_MS = 10 * 60_000;
+
+/**
+ * Donnée partagée entre tous les onglets : un seul chargement, gardée 10 min,
+ * rechargée à la demande (`load(true)`) ou modifiée localement (`update`).
+ */
+function createShared<T>(loader: () => Promise<T>, fallback?: T) {
+  let value: T | undefined;
+  let at = 0;
+  let pending: Promise<T | undefined> | null = null;
+  const subs = new Set<(v: T | undefined) => void>();
+  const emit = () => subs.forEach(f => f(value));
+  return {
+    get: () => value,
+    subscribe(f: (v: T | undefined) => void) {
+      subs.add(f);
+      return () => {
+        subs.delete(f);
+      };
+    },
+    load(force = false): Promise<T | undefined> {
+      if (!force && value !== undefined && Date.now() - at < SHARED_TTL_MS) return Promise.resolve(value);
+      if (pending) return pending;
+      pending = loader()
+        .then(v => {
+          value = v;
+          at = Date.now();
+          emit();
+          return v;
+        })
+        .catch(err => {
+          // Échec (réseau…) : valeur de repli affichée, nouvel essai au prochain affichage.
+          console.error('Chargement :', err);
+          if (value === undefined && fallback !== undefined) {
+            value = fallback;
+            emit();
+          }
+          return value;
+        })
+        .finally(() => {
+          pending = null;
+        });
+      return pending;
+    },
+    update(f: (v: T | undefined) => T | undefined) {
+      value = f(value);
+      emit();
+    },
+    clear() {
+      value = undefined;
+      at = 0;
+    },
+  };
+}
+type Shared<T> = ReturnType<typeof createShared<T>>;
+
+function useShared<T>(shared: Shared<T>, enabled: boolean): T | undefined {
+  const [value, setValue] = useState<T | undefined>(() => shared.get());
+  useEffect(() => {
+    if (!enabled) return;
+    const unsubscribe = shared.subscribe(setValue);
+    shared.load().then(v => setValue(v));
+    return unsubscribe;
+  }, [shared, enabled]);
+  return value;
+}
+
+/** Données d'un autre compte : rien n'est gardé après une déconnexion. */
+export function clearSharedCaches() {
+  libraryCache.clear();
+  eventsCache.clear();
+  accountsCache.clear();
+}
+
+/**
+ * Abonnement temps réel actif seulement quand l'app est à l'écran : coupé après 2 min
+ * en arrière-plan (onglet oublié = aucun message compté), rétabli au retour avec un
+ * seul rechargement pour rattraper ce qui a changé.
+ */
+function useLiveChannel(enabled: boolean, subscribe: () => RealtimeChannel, onResume: () => void) {
+  const subscribeRef = useRef(subscribe);
+  subscribeRef.current = subscribe;
+  const resumeRef = useRef(onResume);
+  resumeRef.current = onResume;
+
+  useEffect(() => {
+    if (!enabled) return;
+    let channel: RealtimeChannel | null = document.hidden ? null : subscribeRef.current();
+    let pause: ReturnType<typeof setTimeout> | undefined;
+    const onVisibility = () => {
+      if (document.hidden) {
+        pause = setTimeout(() => {
+          if (channel) sbClient.removeChannel(channel);
+          channel = null;
+        }, 2 * 60_000);
+      } else {
+        clearTimeout(pause);
+        if (!channel) {
+          resumeRef.current();
+          channel = subscribeRef.current();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      clearTimeout(pause);
+      if (channel) sbClient.removeChannel(channel);
+    };
+  }, [enabled]);
+}
 
 /** Supabase ne lève pas d'exception : on transforme `{ error }` en erreur. */
 export function must<T extends { error: unknown }>(res: T): T {
@@ -160,43 +274,42 @@ export function useFleetData(user: User | null) {
       setScreens([]);
       return;
     }
-
     refresh();
+  }, [userId, refresh]);
 
-    // Regroupe les rafales d'événements en un seul rechargement.
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const scheduleRefresh = () => {
-      clearTimeout(timer);
-      timer = setTimeout(refresh, 300);
-    };
-
-    const channel = sbClient
-      .channel(`fleet-${userId}-${Date.now()}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'groups' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'configurations' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'screens_config' }, payload => {
-        if (payload.eventType === 'UPDATE' && payload.new) {
-          const next = payload.new as AppScreen;
-          const current = screensRef.current.find(s => s.id === next.id);
-          // TV en attente de connexion hors de notre périmètre : son signal de vie ne nous concerne pas.
-          if (!current && isPairingId(next.id)) return;
-          // Écran hors de notre périmètre ou changement d'assignation → rechargement complet.
-          if (!current || current.configuration_id !== next.configuration_id) {
-            scheduleRefresh();
+  // Temps réel : regroupe les rafales d'événements en un seul rechargement.
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useLiveChannel(
+    !!userId,
+    () => {
+      const scheduleRefresh = () => {
+        clearTimeout(timer.current);
+        timer.current = setTimeout(refresh, 300);
+      };
+      return sbClient
+        .channel(`fleet-${userId}-${Date.now()}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'groups' }, scheduleRefresh)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'configurations' }, scheduleRefresh)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'screens_config' }, payload => {
+          if (payload.eventType === 'UPDATE' && payload.new) {
+            const next = payload.new as AppScreen;
+            const current = screensRef.current.find(s => s.id === next.id);
+            // TV en attente de connexion hors de notre périmètre : son signal de vie ne nous concerne pas.
+            if (!current && isPairingId(next.id)) return;
+            // Écran hors de notre périmètre ou changement d'assignation → rechargement complet.
+            if (!current || current.configuration_id !== next.configuration_id) {
+              scheduleRefresh();
+              return;
+            }
+            setScreens(prev => prev.map(s => (s.id === next.id ? next : s)));
             return;
           }
-          setScreens(prev => prev.map(s => (s.id === next.id ? next : s)));
-          return;
-        }
-        scheduleRefresh();
-      })
-      .subscribe();
-
-    return () => {
-      clearTimeout(timer);
-      sbClient.removeChannel(channel);
-    };
-  }, [userId, refresh]);
+          scheduleRefresh();
+        })
+        .subscribe();
+    },
+    refresh,
+  );
 
   // Les TV qui attendent d'être connectées (QR code) ne sont pas des écrans : on les sépare.
   const fleetScreens = useMemo(() => screens.filter(s => !isPairingRow(s)), [screens]);
@@ -206,61 +319,47 @@ export function useFleetData(user: User | null) {
 }
 
 /** Liste des comptes (admin uniquement) : sert à choisir le propriétaire d'un écran ou d'un restaurant. */
+const accountsCache = createShared<Profile[]>(async () => {
+  const { data, error } = await sbClient.from('profiles').select('id,email,role').order('email', { ascending: true });
+  if (error) {
+    console.warn('Lecture des comptes impossible :', error.message);
+    return [];
+  }
+  return (data || []) as Profile[];
+});
+
 export function useAccounts(enabled: boolean) {
-  const [accounts, setAccounts] = useState<Profile[]>([]);
-  useEffect(() => {
-    if (!enabled) return;
-    sbClient
-      .from('profiles')
-      .select('id,email,role')
-      .order('email', { ascending: true })
-      .then(({ data, error }) => {
-        if (error) console.warn('Lecture des comptes impossible :', error.message);
-        else setAccounts((data || []) as Profile[]);
-      });
-  }, [enabled]);
-  return accounts;
+  const accounts = useShared(accountsCache, enabled);
+  return accounts ?? [];
 }
 
 /**
  * Journal de maintenance (table screen_events), tenu à jour en temps réel.
  * `available` vaut false tant que la migration 20261110_maintenance.sql n'est pas passée.
  */
-export function useScreenEvents(limit = 500) {
-  const [events, setEvents] = useState<ScreenEvent[]>([]);
-  const [available, setAvailable] = useState<boolean | null>(null);
+const EVENTS_LIMIT = 500;
+const eventsCache = createShared<{ events: ScreenEvent[]; available: boolean }>(async () => {
+  const { data, error } = await sbClient.from('screen_events').select('*').order('created_at', { ascending: false }).limit(EVENTS_LIMIT);
+  if (error) return { events: [], available: false };
+  return { events: (data || []) as ScreenEvent[], available: true };
+});
 
-  useEffect(() => {
-    let cancelled = false;
-    sbClient
-      .from('screen_events')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(limit)
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          setAvailable(false);
-          return;
-        }
-        setAvailable(true);
-        setEvents((data || []) as ScreenEvent[]);
-      });
-
-    const channel = sbClient
-      .channel(`screen-events-${Date.now()}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'screen_events' }, payload => {
-        setEvents(prev => [payload.new as ScreenEvent, ...prev].slice(0, limit));
-      })
-      .subscribe();
-
-    return () => {
-      cancelled = true;
-      sbClient.removeChannel(channel);
-    };
-  }, [limit]);
-
-  return { events, available };
+export function useScreenEvents(limit = EVENTS_LIMIT) {
+  const state = useShared(eventsCache, true);
+  // Un seul abonnement par écran affiché ; les nouveaux événements alimentent le cache partagé.
+  useLiveChannel(
+    state?.available === true,
+    () =>
+      sbClient
+        .channel(`screen-events-${Date.now()}`)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'screen_events' }, payload => {
+          eventsCache.update(prev => (prev ? { ...prev, events: [payload.new as ScreenEvent, ...prev.events].slice(0, EVENTS_LIMIT) } : prev));
+        })
+        .subscribe(),
+    () => eventsCache.load(true),
+  );
+  const events = useMemo(() => (state?.events ?? []).slice(0, limit), [state, limit]);
+  return { events, available: state ? state.available : null };
 }
 
 /** Envoie une commande à un écran : le lecteur l'exécute à son prochain relevé (≤ 1 min, 5 min en veille ; anciens lecteurs : 30 s). */
@@ -323,33 +422,26 @@ export function useVideoAnalyses(urls: string[]) {
 }
 
 /** Médiathèque (dossiers + vidéos). */
+const libraryCache = createShared<{ albums: Album[]; videos: VideoFile[] }>(async () => {
+  const [a, v] = await Promise.all([
+    sbClient.from('albums').select('*').order('created_at', { ascending: true }),
+    sbClient.from('videos').select('*').order('created_at', { ascending: true }),
+  ]);
+  must(a);
+  must(v);
+  return { albums: (a.data || []) as Album[], videos: (v.data || []) as VideoFile[] };
+}, { albums: [], videos: [] });
+
+/**
+ * Médiathèque partagée par tous les onglets : chargée une fois, gardée 10 min.
+ * `refresh()` (après un ajout, une suppression…) recharge et met à jour tous les onglets.
+ */
 export function useLibrary() {
-  const [albums, setAlbums] = useState<Album[]>([]);
-  const [videos, setVideos] = useState<VideoFile[]>([]);
-  const [loading, setLoading] = useState(true);
-
+  const state = useShared(libraryCache, true);
   const refresh = useCallback(async () => {
-    try {
-      const [a, v] = await Promise.all([
-        sbClient.from('albums').select('*').order('created_at', { ascending: true }),
-        sbClient.from('videos').select('*').order('created_at', { ascending: true }),
-      ]);
-      must(a);
-      must(v);
-      setAlbums((a.data || []) as Album[]);
-      setVideos((v.data || []) as VideoFile[]);
-    } catch (err) {
-      console.error('Chargement de la médiathèque :', err);
-    } finally {
-      setLoading(false);
-    }
+    await libraryCache.load(true);
   }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  return { albums, videos, loading, refresh };
+  return { albums: state?.albums ?? [], videos: state?.videos ?? [], loading: state === undefined, refresh };
 }
 
 /** Horloge qui se met à jour périodiquement (pour le statut en ligne). */
