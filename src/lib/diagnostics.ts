@@ -1,4 +1,5 @@
 // Moteur de diagnostic du parc : analyse les données et liste les problèmes, classés par gravité.
+import { healthLights, healthOf, networkLight, stabilityLight } from './health';
 import { IMAGE_SECONDS, ONLINE_THRESHOLD_MS, isGoogleDrive, isImageUrl, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from './media';
 import type { AppScreen, Configuration, Group, ScreenEvent, VideoFile } from './types';
 import { assess, wallTarget, type VideoAnalysis } from './videoAnalysis';
@@ -29,7 +30,10 @@ export type IssueKind =
   | 'schedule_mismatch'
   | 'sleep_while_open'
   | 'awake_while_closed'
-  | 'scheduler_down';
+  | 'scheduler_down'
+  | 'weak_network'
+  | 'device_health'
+  | 'wall_sync';
 
 export interface Issue {
   id: string;
@@ -224,6 +228,44 @@ export function diagnose({ screens, configurations, groups, videos, media, now, 
     const outages24h = events.filter(e => e.screen_id === s.id && e.kind === 'outage' && now - new Date(e.created_at).getTime() < 24 * 3600 * 1000).length;
     if (outages24h >= 3) {
       add({ kind: 'unstable', severity: 'warning', screenId: s.id, title: 'Connexion instable', detail: `${outages24h} coupures en 24 h · ${where}` });
+    }
+
+    // --- Voyants envoyés par la TV (lecteur 1.8+), seulement si elle est en ligne ---
+    const h = online ? healthOf(s) : null;
+    if (h) {
+      const net = networkLight(h);
+      const stab = stabilityLight(h);
+      if (net.tone !== 'ok' || stab.tone !== 'ok') {
+        const bad = net.tone === 'bad' || stab.tone === 'bad';
+        add({
+          kind: 'weak_network',
+          severity: bad ? 'critical' : 'warning',
+          screenId: s.id,
+          title: net.tone !== 'ok' ? (h.net === 'wifi' ? 'Wi-Fi faible' : 'Pas d’accès internet') : 'Connexion instable',
+          detail: `${[net.tone !== 'ok' ? net.value : '', stab.tone !== 'ok' ? stab.value : ''].filter(Boolean).join(' · ')} · ${where}`,
+        });
+      }
+      const device = healthLights(h).filter(l => ['disk', 'heat', 'play'].includes(l.key) && l.tone !== 'ok' && l.tone !== 'off');
+      // Lecture en chargement / téléchargement : normal quelques minutes, on ne signale que l'erreur.
+      const real = device.filter(l => l.key !== 'play' || h.play === 'error');
+      if (real.length > 0) {
+        add({
+          kind: 'device_health',
+          severity: real.some(l => l.tone === 'bad') ? 'critical' : 'warning',
+          screenId: s.id,
+          title: real.map(l => (l.key === 'disk' ? 'Stockage presque plein' : l.key === 'heat' ? 'TV trop chaude' : 'Erreur de lecture')).join(' · '),
+          detail: `${real.map(l => `${l.label} : ${l.value}`).join(' · ')} · ${where}`,
+        });
+      }
+      if (h.sync === 's' && h.play !== 'sleep' && (!h.cal || (h.drift ?? 0) > 300)) {
+        add({
+          kind: 'wall_sync',
+          severity: 'warning',
+          screenId: s.id,
+          title: !h.cal ? 'Mur désynchronisé' : 'Mur décalé',
+          detail: `${!h.cal ? 'Pas de contact avec l’écran maître (même réseau ?)' : `Écart ${h.drift} ms`} · ${where}`,
+        });
+      }
     }
     if (s.command_id && s.command_id !== s.command_ack && s.command_at && now - new Date(s.command_at).getTime() > 2 * 60 * 1000) {
       add({

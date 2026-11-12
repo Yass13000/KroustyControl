@@ -38,6 +38,8 @@ export interface AppScreen {
   update_state_at?: string | null;
   // Extinction réelle hors horaires (lecteur 1.7+, migration 20261112_screen_off.sql)
   screen_off?: boolean | null;
+  // Voyants de santé (lecteur 1.8+, migration 20261112_health.sql) — voir lib/health.ts
+  health?: Record<string, unknown> | null;
 }
 
 export type ScreenEventKind = 'outage' | 'boot' | 'error' | 'command' | 'content' | 'assign' | 'power';
