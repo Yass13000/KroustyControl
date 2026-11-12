@@ -136,10 +136,10 @@ export function controlTiles({
     },
     {
       key: 'playback',
-      label: 'Lecture',
+      label: playErr.size ? (playErr.size > 1 ? 'Erreurs' : 'Erreur') : 'Lecture',
       icon: Play,
-      // Erreurs : on les compte (sinon « 3/3 » en rouge serait contradictoire).
-      value: playErr.size ? `${playErr.size} erreur${playErr.size > 1 ? 's' : ''}` : awake.length ? `${playing}/${awake.length}` : '—',
+      // Erreurs : on affiche leur nombre (« 3/3 » en rouge serait contradictoire).
+      value: playErr.size ? `${playErr.size}` : awake.length ? `${playing}/${awake.length}` : '—',
       tone: playErr.size ? 'bad' : awake.length ? (playing < awake.length ? 'warn' : 'ok') : 'off',
       match: s => playErr.has(s.id) || (healthOf(s)?.play !== undefined && !['playing', 'sleep'].includes(healthOf(s)!.play!)),
     },

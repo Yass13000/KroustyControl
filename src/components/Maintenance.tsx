@@ -15,6 +15,7 @@ import {
   Loader2,
   MonitorPlay,
   Moon,
+  Store,
   RefreshCw,
   Undo2,
   Unplug,
@@ -84,6 +85,8 @@ export default function Maintenance({ groups, configurations, screens, onChanged
   const [tab, setTab] = useState<'issues' | 'screens' | 'players' | 'history'>('issues');
   // Tuile du centre de contrôle sélectionnée : filtre la liste des écrans.
   const [tileFilter, setTileFilter] = useState<string | null>(null);
+  // Restaurant sélectionné dans la liste des écrans (null = tous ; '' = non assignés).
+  const [groupFilter, setGroupFilter] = useState<string | null>(null);
   const [fixing, setFixing] = useState<string | null>(null);
   const [log, setLog] = useState<LogEvent[]>([]);
 
@@ -375,6 +378,31 @@ export default function Maintenance({ groups, configurations, screens, onChanged
     const rb = wb ? SEVERITY_ORDER[wb] : 3;
     return ra - rb || a.id.localeCompare(b.id, 'fr');
   });
+  // Écrans affichés : filtre de tuile, puis de restaurant ; regroupés par restaurant.
+  const groupIdOf = (scr: AppScreen) => placeOf(scr).group?.id ?? '';
+  const tileScreens = sortedScreens.filter(scr => !activeTile || activeTile.match(scr));
+  const visibleScreens = tileScreens.filter(scr => groupFilter === null || groupIdOf(scr) === groupFilter);
+  const sectionOf = (id: string) => ({
+    id,
+    label: id ? groupById.get(id)?.name || 'Restaurant' : 'Non assignés',
+    screens: visibleScreens.filter(scr => groupIdOf(scr) === id),
+  });
+  const screenSections = [...new Set(visibleScreens.map(groupIdOf))]
+    .map(sectionOf)
+    .sort((x, y) => (x.id === '' ? 1 : y.id === '' ? -1 : x.label.localeCompare(y.label, 'fr')));
+  const worstTone = (list: AppScreen[]) => {
+    const sev = list.map(scr => worstOf(scr.id)).filter(Boolean) as Severity[];
+    return sev.includes('critical') ? 'bg-red-500' : sev.includes('warning') ? 'bg-amber-500' : 'bg-emerald-500';
+  };
+  const restaurantChips: { id: string | null; label: string; count: number; tone?: string }[] = [
+    { id: null, label: 'Tous', count: tileScreens.length },
+    ...[...new Set(tileScreens.map(groupIdOf))]
+      .map(id => {
+        const list = tileScreens.filter(scr => groupIdOf(scr) === id);
+        return { id, label: id ? groupById.get(id)?.name || 'Restaurant' : 'Non assignés', count: list.length, tone: worstTone(list) };
+      })
+      .sort((x, y) => (x.id === '' ? 1 : y.id === '' ? -1 : x.label.localeCompare(y.label, 'fr'))),
+  ];
 
   return (
     <div className="space-y-5">
@@ -511,45 +539,77 @@ export default function Maintenance({ groups, configurations, screens, onChanged
       {/* --- Tous les écrans --- */}
       {tab === 'screens' && (
         <div className="space-y-3">
-        {activeTile && (
-          <div className="flex items-center gap-2 px-1">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-ink px-3 py-1.5 text-sm font-bold text-white">
-              {activeTile.label}
-              <span className="text-white/60">· {sortedScreens.filter(activeTile.match).length}</span>
-            </span>
-            <button type="button" onClick={() => setTileFilter(null)} className="text-sm font-semibold text-muted hover:text-ink">
-              Tout afficher
-            </button>
+          {/* Restaurants : pastille de couleur = pire problème du restaurant */}
+          <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 sm:mx-0 sm:flex-wrap sm:px-0">
+            {restaurantChips.map(c => (
+              <button
+                key={c.id ?? 'all'}
+                type="button"
+                aria-pressed={groupFilter === c.id}
+                onClick={() => setGroupFilter(c.id)}
+                className={cn(
+                  'inline-flex h-10 flex-shrink-0 items-center gap-2 rounded-full border px-3.5 text-sm font-bold transition active:scale-[0.97]',
+                  groupFilter === c.id ? 'border-ink bg-ink text-white' : 'border-line bg-white text-ink hover:border-brand/50',
+                )}
+              >
+                {c.tone && <span className={cn('h-2.5 w-2.5 rounded-full', c.tone)} />}
+                {c.label}
+                <span className={cn('tabular-nums', groupFilter === c.id ? 'text-white/60' : 'text-muted')}>{c.count}</span>
+              </button>
+            ))}
           </div>
-        )}
-        {activeTile && sortedScreens.filter(activeTile.match).length === 0 ? (
-          <EmptyState icon={<CheckCircle2 className="h-6 w-6" />} title="Rien à signaler" />
-        ) : (
-        <ul className="card grid overflow-hidden lg:grid-cols-2 [&>li]:border-b [&>li]:border-sand lg:[&>li:nth-child(odd)]:border-r">
-          {sortedScreens.filter(s => !activeTile || activeTile.match(s)).map(s => {
-            const { config, group } = placeOf(s);
-            const worst = worstOf(s.id);
-            const n = issuesOf(s.id).length;
-            return (
-              <li key={s.id}>
-                <button type="button" onClick={() => setOpenScreenId(s.id)} className="flex w-full items-center gap-3 p-3.5 text-left transition hover:bg-cream/70">
-                  <StatusDot online={isOnline(s.last_ping, now)} sleeping={s.power_state === 'sleep'} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[15px] font-bold text-ink">{s.id}</span>
-                    <span className="block truncate text-xs text-muted">{group ? `${group.name} · ${config?.name}` : 'En attente'}</span>
-                  </span>
-                  <ScreenStrip s={s} online={isOnline(s.last_ping, now)} />
-                  <span className="hidden text-xs tabular-nums text-muted sm:block">{timeAgo(s.last_ping, now)}</span>
-                  {worst && (
-                    <span className={cn('inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-xs font-black', SEVERITY_UI[worst].tone)}>{n}</span>
-                  )}
-                  <ChevronRight className="h-4.5 w-4.5 flex-shrink-0 text-muted" />
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-        )}
+
+          {activeTile && (
+            <div className="flex items-center gap-2 px-1">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-brand px-3 py-1.5 text-sm font-bold text-white">
+                {activeTile.label}
+                <span className="text-white/70">· {visibleScreens.length}</span>
+              </span>
+              <button type="button" onClick={() => setTileFilter(null)} className="text-sm font-semibold text-muted hover:text-ink">
+                Tout afficher
+              </button>
+            </div>
+          )}
+
+          {visibleScreens.length === 0 ? (
+            <EmptyState icon={<CheckCircle2 className="h-6 w-6" />} title="Rien à signaler" />
+          ) : (
+            screenSections.map(section => (
+              <section key={section.id ?? 'none'} className="space-y-2">
+                {groupFilter === null && (
+                  <h3 className="flex items-center gap-2 px-1 pt-1 text-sm font-extrabold text-ink">
+                    <Store className="h-4 w-4 text-brand" />
+                    {section.label}
+                    <span className="font-semibold text-muted">· {section.screens.length}</span>
+                  </h3>
+                )}
+                <ul className="card grid overflow-hidden lg:grid-cols-2 [&>li]:border-b [&>li]:border-sand lg:[&>li:nth-child(odd)]:border-r">
+                  {section.screens.map(s => {
+                    const { config, group } = placeOf(s);
+                    const worst = worstOf(s.id);
+                    const n = issuesOf(s.id).length;
+                    return (
+                      <li key={s.id}>
+                        <button type="button" onClick={() => setOpenScreenId(s.id)} className="flex w-full items-center gap-3 p-3.5 text-left transition hover:bg-cream/70">
+                          <StatusDot online={isOnline(s.last_ping, now)} sleeping={s.power_state === 'sleep'} />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[15px] font-bold text-ink">{s.id}</span>
+                            <span className="block truncate text-xs text-muted">{group ? config?.name : 'En attente'}</span>
+                          </span>
+                          <ScreenStrip s={s} online={isOnline(s.last_ping, now)} />
+                          <span className="hidden text-xs tabular-nums text-muted sm:block">{timeAgo(s.last_ping, now)}</span>
+                          {worst && (
+                            <span className={cn('inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-xs font-black', SEVERITY_UI[worst].tone)}>{n}</span>
+                          )}
+                          <ChevronRight className="h-4.5 w-4.5 flex-shrink-0 text-muted" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))
+          )}
         </div>
       )}
 
