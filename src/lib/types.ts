@@ -53,7 +53,7 @@ export interface ScreenEvent {
   created_at: string;
 }
 
-export type ScreenCommand = 'reload' | 'clear_cache' | 'unpair' | 'identify' | 'power_setup' | 'health';
+export type ScreenCommand = 'reload' | 'clear_cache' | 'unpair' | 'identify' | 'power_setup' | 'health' | 'home_setup';
 
 export interface Profile {
   id: string;

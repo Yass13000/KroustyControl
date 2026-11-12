@@ -429,7 +429,7 @@ export const formatDuration = (sec: number) => {
 /* ------------------------------ Historique ------------------------------ */
 
 export const commandLabel = (c: string | null | undefined) =>
-  c === 'reload' ? 'Redémarrer le lecteur' : c === 'clear_cache' ? 'Vider le cache vidéo' : c === 'unpair' ? 'Déconnecter la TV' : c === 'identify' ? 'Identifier l’écran' : c === 'power_setup' ? 'Autoriser l’extinction' : c === 'health' ? 'Actualiser les voyants' : c || 'Commande';
+  c === 'reload' ? 'Redémarrer le lecteur' : c === 'clear_cache' ? 'Vider le cache vidéo' : c === 'unpair' ? 'Déconnecter la TV' : c === 'identify' ? 'Identifier l’écran' : c === 'power_setup' ? 'Autoriser l’extinction' : c === 'health' ? 'Actualiser les voyants' : c === 'home_setup' ? 'SYNK en écran d’accueil' : c || 'Commande';
 
 export const formatSpan = (ms: number) => {
   const m = Math.max(1, Math.round(ms / 60000));

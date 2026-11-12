@@ -15,6 +15,7 @@ import {
   Loader2,
   MonitorPlay,
   Moon,
+  House,
   Store,
   RefreshCw,
   Undo2,
@@ -332,6 +333,8 @@ export default function Maintenance({ groups, configurations, screens, onChanged
           ? `${s.id} · la TV oublie cet écran et réaffiche son QR code`
           : command === 'power_setup'
             ? `${s.id} · une fenêtre s’ouvre sur la TV : choisir « Activer » avec la télécommande`
+            : command === 'home_setup'
+              ? `${s.id} · une fenêtre s’ouvre sur la TV : choisir SYNK comme application d’accueil`
           : `${s.id} · exécuté sous 1 min si l’écran est en ligne (5 min en veille)`,
       confirmLabel: 'Envoyer',
       danger: command === 'clear_cache' || command === 'unpair',
@@ -863,6 +866,19 @@ export default function Maintenance({ groups, configurations, screens, onChanged
             <Button variant="secondary" icon={<Eraser className="h-4 w-4" />} disabled={pending} onClick={() => sendCommand(s, 'clear_cache')}>
               Vider le cache
             </Button>
+            {/* Lecteur 1.12+ : SYNK comme application d'accueil de la TV */}
+            {(screenVersionCode(s) ?? 0) >= 14 && healthOf(s)?.home === false && (
+              <div className="col-span-2 flex items-center gap-3 rounded-2xl border border-line bg-white p-3">
+                <House className="h-5 w-5 flex-shrink-0 text-brand" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-bold text-ink">Écran d’accueil</span>
+                  <span className="block text-xs font-semibold text-amber-700">SYNK ne démarre pas encore tout seul</span>
+                </span>
+                <Button size="sm" variant="soft" disabled={pending} onClick={() => sendCommand(s, 'home_setup')}>
+                  Proposer
+                </Button>
+              </div>
+            )}
             {/* Lecteur 1.7+ : extinction réelle de l'écran hors horaires */}
             {(screenVersionCode(s) ?? 0) >= 8 && (
               <div className="col-span-2 flex items-center gap-3 rounded-2xl border border-line bg-white p-3">

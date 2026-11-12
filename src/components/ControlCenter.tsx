@@ -5,6 +5,7 @@ import {
   Clock,
   Film,
   Gauge,
+  House,
   HardDrive,
   LayoutGrid,
   Loader2,
@@ -261,6 +262,7 @@ const LIGHT_ICON: Record<string, LucideIcon> = {
   up: Clock,
   res: Monitor,
   owner: ShieldCheck,
+  home: House,
 };
 
 /** Voyants en tuiles : icône colorée en haut, donnée en dessous. */

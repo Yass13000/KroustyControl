@@ -48,6 +48,8 @@ export interface ScreenHealth {
   drift?: number;
   peers?: number;
   ntp?: number;
+  /** SYNK est l'application d'accueil de la TV (lecteur 1.12+) */
+  home?: boolean;
 }
 
 export type Tone = 'ok' | 'warn' | 'bad' | 'off';
@@ -129,6 +131,9 @@ export function healthLights(h: ScreenHealth): Light[] {
     const d = Math.floor(h.up / 1440);
     const hrs = Math.floor((h.up % 1440) / 60);
     lights.push({ key: 'up', label: 'TV allumée depuis', value: d > 0 ? `${d} j ${hrs} h` : hrs > 0 ? `${hrs} h ${h.up % 60} min` : `${h.up} min`, tone: 'ok' });
+  }
+  if (h.home !== undefined) {
+    lights.push({ key: 'home', label: 'Écran d’accueil', value: h.home ? 'SYNK · démarre seul' : 'Pas encore SYNK', tone: h.home ? 'ok' : 'warn' });
   }
   if (h.res) lights.push({ key: 'res', label: 'Affichage', value: `${h.res}${h.os ? ` · Android API ${h.os}` : ''}`, tone: 'ok' });
   return lights;
