@@ -15,12 +15,6 @@ import {
   Loader2,
   MonitorPlay,
   Moon,
-  Cable,
-  Wifi,
-  WifiHigh,
-  WifiLow,
-  WifiOff,
-  WifiZero,
   RefreshCw,
   Undo2,
   Unplug,
@@ -47,7 +41,8 @@ import {
 } from '../lib/diagnostics';
 import type { AppScreen, Configuration, Group, ScreenCommand, ScreenEvent } from '../lib/types';
 import PlayerUpdates from './PlayerUpdates';
-import { TONE_DOT, TONE_TEXT, healthLights, healthOf, networkLight, stabilityLight, wifiBars, worstTone, type ScreenHealth } from '../lib/health';
+import { ControlCenter, HealthTiles, ScreenStrip, controlTiles } from './ControlCenter';
+import { healthLights, healthOf } from '../lib/health';
 import { screenVersionCode } from '../lib/playerRelease';
 import { Button, EmptyState, IconButton, Modal, PageTitle, Segmented, StatusDot, cn, useFeedback } from './ui';
 
@@ -87,6 +82,8 @@ export default function Maintenance({ groups, configurations, screens, onChanged
   const [filter, setFilter] = useState<'all' | Severity>('all');
   const [openScreenId, setOpenScreenId] = useState<string | null>(null);
   const [tab, setTab] = useState<'issues' | 'screens' | 'players' | 'history'>('issues');
+  // Tuile du centre de contrôle sélectionnée : filtre la liste des écrans.
+  const [tileFilter, setTileFilter] = useState<string | null>(null);
   const [fixing, setFixing] = useState<string | null>(null);
   const [log, setLog] = useState<LogEvent[]>([]);
 
@@ -368,6 +365,8 @@ export default function Maintenance({ groups, configurations, screens, onChanged
   /* ------------------------------ Rendu ------------------------------ */
 
   const healthy = counts.critical === 0 && counts.warning === 0;
+  const tiles = controlTiles({ screens, configurations, issues, now, media: { ok: mediaOk, total: allUrls.length, testing } });
+  const activeTile = tiles.find(t => t.key === tileFilter) || null;
   const openScreen = screens.find(s => s.id === openScreenId) || null;
   const sortedScreens = [...screens].sort((a, b) => {
     const wa = worstOf(a.id);
@@ -381,6 +380,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
     <div className="space-y-5">
       <PageTitle
         title="Maintenance"
+        subtitle={healthy ? 'Tout fonctionne' : `${counts.critical + counts.warning} problème${counts.critical + counts.warning > 1 ? 's' : ''} à traiter`}
         actions={
           <div className="flex gap-2">
             <IconButton label="Retester les vidéos" variant="secondary" disabled={testing} onClick={() => testUrls(allUrls)}>
@@ -393,36 +393,20 @@ export default function Maintenance({ groups, configurations, screens, onChanged
         }
       />
 
-      {/* --- État global --- */}
-      <section className={cn('card overflow-hidden p-4', healthy ? 'border-emerald-200' : counts.critical ? 'border-red-200' : 'border-amber-200')}>
-        <div className="flex items-center gap-3">
-          <span
-            className={cn(
-              'flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl',
-              healthy ? 'bg-emerald-50 text-emerald-600' : counts.critical ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600',
-            )}
-          >
-            {healthy ? <CheckCircle2 className="h-7 w-7" /> : counts.critical ? <AlertOctagon className="h-7 w-7" /> : <AlertTriangle className="h-7 w-7" />}
-          </span>
-          <div className="min-w-0">
-            <p className="text-xl font-extrabold text-ink">
-              {healthy ? 'Tout fonctionne' : `${counts.critical + counts.warning} problème${counts.critical + counts.warning > 1 ? 's' : ''}`}
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-3 grid grid-cols-4 gap-2">
-          <Stat label="En ligne" value={`${onlineCount}`} sub={`/${screens.length}`} dot="online" />
-          <Stat label="Hors ligne" value={`${screens.length - onlineCount}`} dot="offline" />
-          <Stat label="Critiques" value={`${counts.critical}`} tone={counts.critical ? 'text-red-600' : undefined} />
-          <Stat
-            label="Vidéos OK"
-            value={`${mediaOk}`}
-            sub={`/${allUrls.length}`}
-            extra={testing ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" /> : undefined}
-          />
-        </div>
-      </section>
+      {/* --- Centre de contrôle --- */}
+      <ControlCenter
+        tiles={tiles}
+        active={tab === 'screens' ? tileFilter : null}
+        onSelect={key => {
+          if (key === 'players') {
+            setTileFilter(null);
+            setTab('players');
+            return;
+          }
+          setTileFilter(prev => (prev === key && tab === 'screens' ? null : key));
+          setTab('screens');
+        }}
+      />
 
       {/* --- Onglets --- */}
       <nav className="no-scrollbar sticky top-0 z-10 -mx-4 flex gap-1 overflow-x-auto border-b border-line bg-cream/90 px-4 backdrop-blur sm:mx-0 sm:px-0" role="tablist">
@@ -527,13 +511,25 @@ export default function Maintenance({ groups, configurations, screens, onChanged
       {/* --- Tous les écrans --- */}
       {tab === 'screens' && (
         <div className="space-y-3">
-        <NetworkSummary screens={screens} now={now} />
+        {activeTile && (
+          <div className="flex items-center gap-2 px-1">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-ink px-3 py-1.5 text-sm font-bold text-white">
+              {activeTile.label}
+              <span className="text-white/60">· {sortedScreens.filter(activeTile.match).length}</span>
+            </span>
+            <button type="button" onClick={() => setTileFilter(null)} className="text-sm font-semibold text-muted hover:text-ink">
+              Tout afficher
+            </button>
+          </div>
+        )}
+        {activeTile && sortedScreens.filter(activeTile.match).length === 0 ? (
+          <EmptyState icon={<CheckCircle2 className="h-6 w-6" />} title="Rien à signaler" />
+        ) : (
         <ul className="card grid overflow-hidden lg:grid-cols-2 [&>li]:border-b [&>li]:border-sand lg:[&>li:nth-child(odd)]:border-r">
-          {sortedScreens.map(s => {
+          {sortedScreens.filter(s => !activeTile || activeTile.match(s)).map(s => {
             const { config, group } = placeOf(s);
             const worst = worstOf(s.id);
             const n = issuesOf(s.id).length;
-            const h = isOnline(s.last_ping, now) ? healthOf(s) : null;
             return (
               <li key={s.id}>
                 <button type="button" onClick={() => setOpenScreenId(s.id)} className="flex w-full items-center gap-3 p-3.5 text-left transition hover:bg-cream/70">
@@ -542,7 +538,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
                     <span className="block truncate text-[15px] font-bold text-ink">{s.id}</span>
                     <span className="block truncate text-xs text-muted">{group ? `${group.name} · ${config?.name}` : 'En attente'}</span>
                   </span>
-                  {h && <NetworkBadge h={h} />}
+                  <ScreenStrip s={s} online={isOnline(s.last_ping, now)} />
                   <span className="hidden text-xs tabular-nums text-muted sm:block">{timeAgo(s.last_ping, now)}</span>
                   {worst && (
                     <span className={cn('inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-xs font-black', SEVERITY_UI[worst].tone)}>{n}</span>
@@ -553,6 +549,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
             );
           })}
         </ul>
+        )}
         </div>
       )}
 
@@ -810,22 +807,6 @@ export default function Maintenance({ groups, configurations, screens, onChanged
   }
 }
 
-function Stat({ label, value, sub, dot, tone, extra }: { label: string; value: string; sub?: string; dot?: 'online' | 'offline'; tone?: string; extra?: ReactNode }) {
-  return (
-    <div className="rounded-2xl bg-cream/70 px-3.5 py-3">
-      <p className="flex items-center gap-1.5 text-xs font-semibold text-muted">
-        {dot && <StatusDot online={dot === 'online'} className="h-2 w-2" />}
-        {label}
-        {extra}
-      </p>
-      <p className={cn('mt-0.5 text-2xl font-extrabold tabular-nums text-ink', tone)}>
-        {value}
-        {sub && <span className="text-base font-bold text-muted">{sub}</span>}
-      </p>
-    </div>
-  );
-}
-
 function Row({ label, value, danger }: { label: string; value: string; danger?: boolean }) {
   return (
     <div className="flex items-start justify-between gap-4 px-3.5 py-2.5 text-sm">
@@ -878,49 +859,7 @@ function EventList({ events, onOpen, compact }: { events: ScreenEvent[]; onOpen?
   );
 }
 
-/** Pastille réseau d'un écran : câble, ou barres Wi-Fi colorées selon le signal et la stabilité. */
-function NetworkBadge({ h }: { h: ScreenHealth }) {
-  const tone = worstTone([networkLight(h), stabilityLight(h)]);
-  const Icon = h.net === 'eth' ? Cable : h.net === 'none' ? WifiOff : [WifiZero, WifiLow, WifiHigh, Wifi, Wifi][wifiBars(h.rssi)];
-  return (
-    <span className={cn('inline-flex flex-shrink-0 items-center gap-1 text-xs font-bold', TONE_TEXT[tone])} title={`${networkLight(h).value} · ${stabilityLight(h).value}`}>
-      <Icon className="h-4 w-4" />
-      {h.ok !== undefined && <span className="tabular-nums">{h.ok}%</span>}
-    </span>
-  );
-}
 
-/** Résumé réseau du parc : combien d'écrans en ligne sont stables, à surveiller, à traiter. */
-function NetworkSummary({ screens, now }: { screens: AppScreen[]; now: number }) {
-  const measured = screens.filter(s => isOnline(s.last_ping, now) && healthOf(s));
-  if (measured.length === 0) return null;
-  const tones = measured.map(s => worstTone([networkLight(healthOf(s)!), stabilityLight(healthOf(s)!)]));
-  const count = (t: string) => tones.filter(x => x === t).length;
-  const wifi = measured.filter(s => healthOf(s)!.net === 'wifi').length;
-  return (
-    <div className="card flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-sm">
-      <span className="flex items-center gap-2 font-extrabold text-ink">
-        <Wifi className="h-4.5 w-4.5 text-brand" /> Réseau
-      </span>
-      <span className="flex items-center gap-1.5 font-semibold text-emerald-700">
-        <span className="h-2 w-2 rounded-full bg-emerald-500" /> {count('ok')} stable{count('ok') > 1 ? 's' : ''}
-      </span>
-      {count('warn') > 0 && (
-        <span className="flex items-center gap-1.5 font-semibold text-amber-700">
-          <span className="h-2 w-2 rounded-full bg-amber-500" /> {count('warn')} à surveiller
-        </span>
-      )}
-      {count('bad') > 0 && (
-        <span className="flex items-center gap-1.5 font-semibold text-red-600">
-          <span className="h-2 w-2 rounded-full bg-red-500" /> {count('bad')} à traiter
-        </span>
-      )}
-      <span className="ml-auto text-xs text-muted">
-        {wifi} Wi-Fi · {measured.length - wifi} câble
-      </span>
-    </div>
-  );
-}
 
 /** Tous les voyants d'un écran (lecteur 1.8+), mesurés toutes les 30 min ou à la demande. */
 function HealthGrid({ s, online, now, refreshing, onRefresh }: { s: AppScreen; online: boolean; now: number; refreshing: boolean; onRefresh?: () => void }) {
@@ -928,32 +867,25 @@ function HealthGrid({ s, online, now, refreshing, onRefresh }: { s: AppScreen; o
   if (!h) {
     return <p className="rounded-2xl bg-cream px-4 py-3 text-sm text-muted">Voyants détaillés : lecteur 1.8 requis.</p>;
   }
-  const lights = healthLights(h);
   return (
-    <div className="space-y-2">
-    <div className="flex items-center justify-between gap-2 px-1">
-      <p className="text-sm font-bold text-ink">
-        Voyants
-        {h.at && <span className="ml-1.5 text-xs font-semibold text-muted">· mesurés {timeAgo(h.at, now)}</span>}
-      </p>
-      {onRefresh && (
-        <Button size="sm" variant="ghost" icon={<RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />} disabled={refreshing} onClick={onRefresh}>
-          Actualiser
-        </Button>
-      )}
-    </div>
-    <div className={cn('grid grid-cols-1 gap-2 sm:grid-cols-2', !online && 'opacity-50')}>
-      {lights.map(l => (
-        <div key={l.key} className="flex items-start gap-2.5 rounded-2xl border border-sand bg-white px-3 py-2.5">
-          <span className={cn('mt-1.5 h-2 w-2 flex-shrink-0 rounded-full', TONE_DOT[l.tone])} />
-          <span className="min-w-0">
-            <span className="block text-[11px] font-bold uppercase tracking-wide text-muted">{l.label}</span>
-            <span className={cn('block text-sm font-semibold', l.tone === 'ok' || l.tone === 'off' ? 'text-ink' : TONE_TEXT[l.tone])}>{l.value}</span>
-          </span>
+    <HealthTiles
+      lights={healthLights(h)}
+      dim={!online}
+      header={
+        <div className="flex items-center justify-between gap-2 px-1">
+          <p className="text-sm font-bold text-ink">
+            Voyants
+            <span className="ml-1.5 text-xs font-semibold text-muted">
+              {!online ? '· avant la coupure' : h.at ? `· mesurés ${timeAgo(h.at, now)}` : ''}
+            </span>
+          </p>
+          {onRefresh && (
+            <Button size="sm" variant="ghost" icon={<RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />} disabled={refreshing} onClick={onRefresh}>
+              Actualiser
+            </Button>
+          )}
         </div>
-      ))}
-      {!online && <p className="text-xs text-muted sm:col-span-2">Derniers voyants reçus avant la coupure.</p>}
-    </div>
-    </div>
+      }
+    />
   );
 }
