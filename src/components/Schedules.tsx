@@ -169,6 +169,12 @@ export default function Schedules({
         </IconButton>
       </div>
 
+      {perScreen && list.some(x => x.enabled && x.video_url) && (
+        <p className="rounded-xl bg-amber-50 px-3 py-2.5 text-xs font-semibold text-amber-800">
+          Mode Séparé : au début et à la fin de chaque créneau, tout le mur reçoit la même playlist. Pour garder une playlist par écran, désactivez les créneaux.
+        </p>
+      )}
+
       {list.map(s => {
         const playlist = parsePlaylist(s.video_url);
         const isActive = active?.id === s.id;
