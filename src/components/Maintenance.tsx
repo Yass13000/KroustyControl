@@ -145,7 +145,8 @@ export default function Maintenance({ groups, configurations, screens, onChanged
       setScheduler({ slots: slots.count || 0, lastRun: (status.data as { last_run: string } | null)?.last_run ?? null });
     };
     check();
-    const id = setInterval(check, 60000);
+    // Plan gratuit : vérification espacée (le programmateur tourne chaque minute côté serveur).
+    const id = setInterval(check, 5 * 60_000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -288,6 +289,17 @@ export default function Maintenance({ groups, configurations, screens, onChanged
 
   /* ------------------------------ Commandes à distance ------------------------------ */
 
+  /** Demande immédiate des voyants (sans confirmation : aucune action sur la TV). */
+  const refreshHealth = async (s: AppScreen) => {
+    try {
+      await sendScreenCommand([s.id], 'health');
+      toast('Voyants demandés · réponse sous 1 min');
+      onChanged();
+    } catch (err) {
+      toast(errorMessage(err), 'error');
+    }
+  };
+
   const sendCommand = async (s: AppScreen, command: ScreenCommand) => {
     const ok = await confirm({
       title: `${commandLabel(command)} ?`,
@@ -296,7 +308,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
           ? `${s.id} · la TV oublie cet écran et réaffiche son QR code`
           : command === 'power_setup'
             ? `${s.id} · une fenêtre s’ouvre sur la TV : choisir « Activer » avec la télécommande`
-          : `${s.id} · exécuté sous 30 s si l’écran est en ligne (1 min en veille)`,
+          : `${s.id} · exécuté sous 1 min si l’écran est en ligne (5 min en veille)`,
       confirmLabel: 'Envoyer',
       danger: command === 'clear_cache' || command === 'unpair',
     });
@@ -666,7 +678,13 @@ export default function Maintenance({ groups, configurations, screens, onChanged
           </ul>
         )}
 
-        <HealthGrid s={s} online={on} />
+        <HealthGrid
+          s={s}
+          online={on}
+          now={now}
+          refreshing={pending && s.command === 'health'}
+          onRefresh={(screenVersionCode(s) ?? 0) >= 10 && on ? () => refreshHealth(s) : undefined}
+        />
 
         <dl className="divide-y divide-sand rounded-2xl border border-sand">
           <Row label="État" value={!on ? 'Hors ligne' : s.power_state === 'sleep' ? 'En veille' : 'En ligne'} />
@@ -904,14 +922,26 @@ function NetworkSummary({ screens, now }: { screens: AppScreen[]; now: number })
   );
 }
 
-/** Tous les voyants d'un écran (lecteur 1.8+). */
-function HealthGrid({ s, online }: { s: AppScreen; online: boolean }) {
+/** Tous les voyants d'un écran (lecteur 1.8+), mesurés toutes les 30 min ou à la demande. */
+function HealthGrid({ s, online, now, refreshing, onRefresh }: { s: AppScreen; online: boolean; now: number; refreshing: boolean; onRefresh?: () => void }) {
   const h = healthOf(s);
   if (!h) {
     return <p className="rounded-2xl bg-cream px-4 py-3 text-sm text-muted">Voyants détaillés : lecteur 1.8 requis.</p>;
   }
   const lights = healthLights(h);
   return (
+    <div className="space-y-2">
+    <div className="flex items-center justify-between gap-2 px-1">
+      <p className="text-sm font-bold text-ink">
+        Voyants
+        {h.at && <span className="ml-1.5 text-xs font-semibold text-muted">· mesurés {timeAgo(h.at, now)}</span>}
+      </p>
+      {onRefresh && (
+        <Button size="sm" variant="ghost" icon={<RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />} disabled={refreshing} onClick={onRefresh}>
+          Actualiser
+        </Button>
+      )}
+    </div>
     <div className={cn('grid grid-cols-1 gap-2 sm:grid-cols-2', !online && 'opacity-50')}>
       {lights.map(l => (
         <div key={l.key} className="flex items-start gap-2.5 rounded-2xl border border-sand bg-white px-3 py-2.5">
@@ -923,6 +953,7 @@ function HealthGrid({ s, online }: { s: AppScreen; online: boolean }) {
         </div>
       ))}
       {!online && <p className="text-xs text-muted sm:col-span-2">Derniers voyants reçus avant la coupure.</p>}
+    </div>
     </div>
   );
 }

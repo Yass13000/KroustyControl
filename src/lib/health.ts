@@ -5,6 +5,8 @@ import type { AppScreen } from './types';
 
 export interface ScreenHealth {
   v?: number;
+  /** Heure de la mesure (ISO, lecteur 1.9+) */
+  at?: string;
   /** wifi | eth | cell | other | none */
   net?: string;
   /** Signal Wi-Fi (dBm) */

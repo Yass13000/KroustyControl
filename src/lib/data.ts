@@ -263,7 +263,7 @@ export function useScreenEvents(limit = 500) {
   return { events, available };
 }
 
-/** Envoie une commande à un écran : le lecteur l'exécute à sa prochaine synchronisation (≤ 30 s, 1 min en veille). */
+/** Envoie une commande à un écran : le lecteur l'exécute à son prochain relevé (≤ 1 min, 5 min en veille ; anciens lecteurs : 30 s). */
 export async function sendScreenCommand(screenIds: string[], command: ScreenCommand) {
   const at = new Date().toISOString();
   await mustAll(
