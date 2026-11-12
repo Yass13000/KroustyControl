@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, CloudUpload, HardDrive, Image as ImageIcon, ChevronLeft, ChevronRight, ClipboardCopy, Copy, Film, FolderOpen, FolderPlus, Gauge, Link2, Loader2, MonitorPlay, Play, Plus, RefreshCw, Search, Trash2, Video, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CloudUpload, FileText, HardDrive, Image as ImageIcon, ChevronLeft, ChevronRight, ClipboardCopy, Copy, Film, FolderOpen, FolderPlus, Gauge, Link2, Loader2, MonitorPlay, Play, Plus, RefreshCw, Search, Trash2, Video, XCircle } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
 import { errorMessage, must, useLibrary, useVideoAnalyses } from '../lib/data';
 import { IMAGE_SECONDS, fileExtension, googleDriveThumbnail, isGoogleDrive, isImageUrl, parsePlaylist, transformStorageUrl } from '../lib/media';
 import { imageThumbnail, isImageFile, prepareImage } from '../lib/image';
+import { PDF_MAX_PAGES, isPdfFile, pdfPageCount, pdfToImages, type PdfFit } from '../lib/pdf';
 import type { Album, AppScreen, Configuration, Group, VideoFile } from '../lib/types';
 import { COMMON, libraryAccess, ownerLabel } from '../lib/library';
 import { FORMAT_CODES, FORMAT_SHORT, SOURCE_LABEL, resolveFormat, usageFormats, type FormatSource } from '../lib/videoFormat';
@@ -169,6 +170,10 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   const [fileAnalysis, setFileAnalysis] = useState<VideoAnalysis | null>(null);
   // Image choisie : préparée (sens, taille, JPEG) avant l'envoi.
   const [fileIsImage, setFileIsImage] = useState(false);
+  // PDF choisi : nombre de pages et cadrage ; chaque page devient une image à l'envoi.
+  const [pdfPages, setPdfPages] = useState<number | null>(null);
+  const [pdfFit, setPdfFit] = useState<PdfFit>('whole');
+  const [pdfStep, setPdfStep] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [space, setSpace] = useState<{ used: number; allocated: number } | null>(null);
   const [uploadUnavailable, setUploadUnavailable] = useState<{ message: string; state: SetupState } | null>(null);
@@ -244,6 +249,7 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
   };
 
   const closeAddVideo = () => {
+    setPdfPages(null);
     setFileIsImage(false);
     abortRef.current?.abort();
     setAddVideoAlbumId(null);
@@ -308,8 +314,18 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
     setFile(f);
     setFileAnalysis(null);
     setFileIsImage(false);
+    setPdfPages(null);
     if (!f) return;
     if (!newVideoName.trim()) setNewVideoName(f.name.replace(/\.[^.]+$/, ''));
+    if (isPdfFile(f)) {
+      try {
+        setPdfPages(await pdfPageCount(f));
+      } catch {
+        setFile(null);
+        toast('PDF illisible (protégé par mot de passe ?)', 'error');
+      }
+      return;
+    }
     if (isImageFile(f)) {
       setFileIsImage(true);
       try {
@@ -338,7 +354,49 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
     if (error) throw error;
   };
 
+  /** PDF : chaque page est convertie en image puis envoyée, dans l'ordre. */
+  const handleUploadPdf = async () => {
+    if (!access.canManage(albumOf(addVideoAlbumId)) || !addVideoAlbumId || !file) return;
+    const base = newVideoName.trim() || file.name.replace(/\.pdf$/i, '');
+    setBusy(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    let sent = 0;
+    try {
+      setPdfStep('Conversion…');
+      const pages = await pdfToImages(file, pdfFit, (n, total) => setPdfStep(`Conversion ${n}/${total}`));
+      for (const [i, page] of pages.entries()) {
+        if (controller.signal.aborted) throw new Error('Envoi annulé');
+        setPdfStep(`Envoi page ${i + 1}/${pages.length}`);
+        const url = await uploadVideo(page.file, p => setProgress((i + p) / pages.length), controller.signal);
+        const localUrl = URL.createObjectURL(page.file);
+        try {
+          await insertVideo(pages.length > 1 ? `${base} – page ${i + 1}` : base, url, megabytes(page.file.size), localUrl, {
+            ok: true,
+            width: page.width,
+            height: page.height,
+          });
+        } finally {
+          URL.revokeObjectURL(localUrl);
+        }
+        sent++;
+      }
+      toast(sent > 1 ? `${sent} pages ajoutées` : 'Page ajoutée');
+      closeAddVideo();
+      await refresh();
+    } catch (err) {
+      toast(`${sent > 0 ? `${sent} page${sent > 1 ? 's' : ''} ajoutée${sent > 1 ? 's' : ''} · ` : ''}${errorMessage(err)}`, 'error');
+      setProgress(null);
+      if (sent > 0) await refresh();
+    } finally {
+      setPdfStep(null);
+      abortRef.current = null;
+      setBusy(false);
+    }
+  };
+
   const handleUploadFile = async () => {
+    if (pdfPages !== null) return handleUploadPdf();
     if (!access.canManage(albumOf(addVideoAlbumId)) || !addVideoAlbumId || !file) return;
     const name = newVideoName.trim() || file.name;
     setBusy(true);
@@ -737,8 +795,8 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
               {progress !== null ? 'Arrêter' : 'Annuler'}
             </Button>
             {addMode === 'file' ? (
-              <Button block loading={busy} disabled={!file || fileAnalysis === null} icon={<CloudUpload className="h-4.5 w-4.5" />} onClick={handleUploadFile}>
-                {progress !== null ? `${Math.round(progress * 100)} %` : 'Envoyer'}
+              <Button block loading={busy} disabled={!file || (fileAnalysis === null && pdfPages === null)} icon={<CloudUpload className="h-4.5 w-4.5" />} onClick={handleUploadFile}>
+                {pdfStep ?? (progress !== null ? `${Math.round(progress * 100)} %` : pdfPages ? `Envoyer ${Math.min(pdfPages, PDF_MAX_PAGES)} page${pdfPages > 1 ? 's' : ''}` : 'Envoyer')}
               </Button>
             ) : (
               <Button block loading={busy} disabled={!newVideoName.trim() || !newVideoUrl.trim()} onClick={handleAddVideoLink}>
@@ -820,9 +878,9 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                       <span className="text-xs text-muted">{megabytes(file.size)}</span>
                     </>
                   ) : (
-                    <span className="text-sm font-bold text-ink">Choisir une vidéo ou une image</span>
+                    <span className="text-sm font-bold text-ink">Vidéo, image ou PDF</span>
                   )}
-                  <input type="file" accept="video/mp4,video/quicktime,video/*,image/jpeg,image/png,image/webp" className="sr-only" disabled={busy} onChange={e => pickFile(e.target.files?.[0] || null)} />
+                  <input type="file" accept="video/mp4,video/quicktime,video/*,image/jpeg,image/png,image/webp,application/pdf,.pdf" className="sr-only" disabled={busy} onChange={e => pickFile(e.target.files?.[0] || null)} />
                 </label>
 
                 {progress !== null && (
@@ -831,7 +889,23 @@ export default function Videos({ isSuperAdmin, onPlayVideo, screens = [], config
                   </div>
                 )}
 
-                {file && progress === null && fileIsImage ? (
+                {file && pdfPages !== null && !busy ? (
+                  <div className="space-y-2">
+                    <p className="flex items-center justify-center gap-1.5 text-sm font-semibold text-emerald-700">
+                      <FileText className="h-4 w-4" />
+                      {pdfPages} page{pdfPages > 1 ? 's' : ''} · une image de {IMAGE_SECONDS} s par page
+                      {pdfPages > PDF_MAX_PAGES && ` · ${PDF_MAX_PAGES} premières`}
+                    </p>
+                    <Segmented
+                      value={pdfFit}
+                      onChange={setPdfFit}
+                      options={[
+                        { value: 'whole', label: 'Page entière' },
+                        { value: 'fill', label: 'Remplir l’écran' },
+                      ]}
+                    />
+                  </div>
+                ) : file && progress === null && fileIsImage ? (
                   fileAnalysis && (
                     <p className="flex items-center justify-center gap-1.5 text-sm font-semibold text-emerald-700">
                       <ImageIcon className="h-4 w-4" />

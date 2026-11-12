@@ -14,6 +14,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.56.0",
     "lucide-react": "^0.462.0",
+    "pdfjs-dist": "6.4.299",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwindcss-animate": "^1.0.7"
