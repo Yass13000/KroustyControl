@@ -14,6 +14,7 @@ import {
   Info,
   Loader2,
   MonitorPlay,
+  Moon,
   RefreshCw,
   Undo2,
   Unplug,
@@ -286,9 +287,11 @@ export default function Maintenance({ groups, configurations, screens, onChanged
       message:
         command === 'unpair'
           ? `${s.id} · la TV oublie cet écran et réaffiche son QR code`
+          : command === 'power_setup'
+            ? `${s.id} · une fenêtre s’ouvre sur la TV : choisir « Activer » avec la télécommande`
           : `${s.id} · exécuté sous 30 s si l’écran est en ligne (1 min en veille)`,
       confirmLabel: 'Envoyer',
-      danger: command !== 'reload',
+      danger: command === 'clear_cache' || command === 'unpair',
     });
     if (!ok) return;
     try {
@@ -718,6 +721,23 @@ export default function Maintenance({ groups, configurations, screens, onChanged
             <Button variant="secondary" icon={<Eraser className="h-4 w-4" />} disabled={pending} onClick={() => sendCommand(s, 'clear_cache')}>
               Vider le cache
             </Button>
+            {/* Lecteur 1.7+ : extinction réelle de l'écran hors horaires */}
+            {(screenVersionCode(s) ?? 0) >= 8 && (
+              <div className="col-span-2 flex items-center gap-3 rounded-2xl border border-line bg-white p-3">
+                <Moon className="h-5 w-5 flex-shrink-0 text-brand" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-bold text-ink">Hors horaires</span>
+                  <span className={cn('block text-xs font-semibold', s.screen_off ? 'text-emerald-700' : 'text-amber-700')}>
+                    {s.screen_off ? 'Écran éteint' : 'Écran noir, encore éclairé'}
+                  </span>
+                </span>
+                {!s.screen_off && (
+                  <Button size="sm" variant="soft" disabled={pending} onClick={() => sendCommand(s, 'power_setup')}>
+                    Autoriser
+                  </Button>
+                )}
+              </div>
+            )}
             {/* Lecteur 1.4+ : la TV revient à l'écran QR code */}
             {(screenVersionCode(s) ?? 0) >= 5 && (
               <Button variant="dangerSoft" className="col-span-2" icon={<Unplug className="h-4 w-4" />} disabled={pending} onClick={() => sendCommand(s, 'unpair')}>

@@ -36,6 +36,8 @@ export interface AppScreen {
   // Mise à jour à distance du lecteur (migration 20261111_player_updates.sql)
   update_state?: string | null;
   update_state_at?: string | null;
+  // Extinction réelle hors horaires (lecteur 1.7+, migration 20261112_screen_off.sql)
+  screen_off?: boolean | null;
 }
 
 export type ScreenEventKind = 'outage' | 'boot' | 'error' | 'command' | 'content' | 'assign' | 'power';
@@ -49,7 +51,7 @@ export interface ScreenEvent {
   created_at: string;
 }
 
-export type ScreenCommand = 'reload' | 'clear_cache' | 'unpair' | 'identify';
+export type ScreenCommand = 'reload' | 'clear_cache' | 'unpair' | 'identify' | 'power_setup';
 
 export interface Profile {
   id: string;
