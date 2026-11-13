@@ -50,7 +50,21 @@ export interface PairTarget {
 }
 
 /** Crée l'écran (si nouveau) puis demande à la TV d'adopter ce nom. */
+/**
+ * Un écran vient d'arriver sur un mur : la programmation du mur est réappliquée dans la minute
+ * (sinon, si elle avait été appliquée quand le mur était vide, l'écran attendrait le prochain créneau).
+ */
+export async function refreshWallSchedule(configId: string) {
+  await sbClient.from('configurations').update({ schedule_target: null }).eq('id', configId); // sans effet si la colonne manque
+}
+
 export async function pairTv(code: string, t: PairTarget) {
+  // Premier écran d'un mur : playlist normale du mur et horaires du restaurant (pas de voisin à copier).
+  let defaultPlaylist = '';
+  if (!t.sibling && t.config) {
+    const { data } = await sbClient.from('configurations').select('default_video_url').eq('id', t.config.id).maybeSingle();
+    defaultPlaylist = (data as { default_video_url?: string | null } | null)?.default_video_url || '';
+  }
   if (!t.replace) {
     const existing = must(await sbClient.from('screens_config').select('id').eq('id', t.name).maybeSingle());
     if (existing.data) throw new Error('Ce nom est déjà utilisé');
@@ -61,18 +75,21 @@ export async function pairTv(code: string, t: PairTarget) {
       pos_y: t.y,
       total_cols: t.cols,
       total_rows: t.rows,
-      video_url: t.sibling?.video_url ?? '',
+      video_url: t.sibling?.video_url ?? defaultPlaylist,
       audio_url: t.sibling?.audio_url ?? '',
       rotation: t.rotation,
     };
-    if (t.sibling?.opening_time) row.opening_time = t.sibling.opening_time;
-    if (t.sibling?.closing_time) row.closing_time = t.sibling.closing_time;
+    const open = t.sibling?.opening_time || t.group?.open_time;
+    const close = t.sibling?.closing_time || t.group?.close_time;
+    if (open) row.opening_time = open.slice(0, 5);
+    if (close) row.closing_time = close.slice(0, 5);
     if (t.ownerId) row.user_id = t.ownerId;
     must(await sbClient.from('screens_config').insert(row));
   } else {
     // Une ancienne commande restée sur l'écran remplacé ne doit pas être rejouée par la nouvelle TV.
     must(await sbClient.from('screens_config').update({ command: null, command_id: null, rotation: t.rotation }).eq('id', t.name));
   }
+  if (t.config) await refreshWallSchedule(t.config.id);
   must(
     await sbClient
       .from('screens_config')

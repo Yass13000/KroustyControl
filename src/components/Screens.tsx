@@ -4,6 +4,7 @@ import { sbClient } from '../lib/supabase';
 import { errorMessage, must, mustAll, sendScreenCommand, useAccounts, useLibrary } from '../lib/data';
 import { supports } from '../lib/playerRelease';
 import WeekCalendar from './WeekCalendar';
+import { refreshWallSchedule } from '../lib/pairing';
 import { FORMATS, fileNameFromUrl, isImageUrl, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from '../lib/media';
 import type { AppScreen, Configuration, Group, Profile } from '../lib/types';
 import { Badge, Button, EmptyState, IconButton, Input, Modal, PageTitle, Segmented, Select, Spinner, StatusDot, Switch, cn, useFeedback } from './ui';
@@ -261,16 +262,20 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
     const { configId, format, x, y } = assignTarget;
     const { rows, cols } = parseFormat(format);
     setAssignTarget(null);
-    await run(
-      async () =>
-        must(
-          await sbClient
-            .from('screens_config')
-            .update({ configuration_id: configId, pos_x: x, pos_y: y, total_cols: cols, total_rows: rows })
-            .eq('id', screenId),
-        ),
-      'Écran rattaché',
-    );
+    // Horaires du restaurant, et programmation du mur réappliquée pour ce nouvel écran.
+    const group = groups.find(g => g.id === configurations.find(c => c.id === configId)?.group_id);
+    const hours: Record<string, string> = {};
+    if (group?.open_time) hours.opening_time = group.open_time.slice(0, 5);
+    if (group?.close_time) hours.closing_time = group.close_time.slice(0, 5);
+    await run(async () => {
+      must(
+        await sbClient
+          .from('screens_config')
+          .update({ configuration_id: configId, pos_x: x, pos_y: y, total_cols: cols, total_rows: rows, ...hours })
+          .eq('id', screenId),
+      );
+      await refreshWallSchedule(configId);
+    }, 'Écran rattaché');
   };
 
   /* ------------------------------ Propriétaires (admin) ------------------------------ */
