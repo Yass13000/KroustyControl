@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { CheckCircle2, CloudUpload, Loader2, MonitorPlay, PackageCheck, Rocket, Store, TestTube2, XCircle } from 'lucide-react';
 import { readApk, PLAYER_PACKAGE, type ApkInfo } from '../lib/apk';
-import { deployRelease, pruneReleases, screenVersionCode, updateStatus, uploadApk } from '../lib/playerRelease';
+import { deployRelease, isWebPlayer, pruneReleases, screenVersionCode, updateStatus, uploadApk } from '../lib/playerRelease';
 import { errorMessage } from '../lib/data';
 import { isOnline } from '../lib/media';
 import { megabytes } from '../lib/videoAnalysis';
@@ -50,7 +50,9 @@ export default function PlayerUpdates({
   }, [screens]);
 
   // Écrans à qui une version plus récente a été demandée
-  const rollout = screens.filter(s => (s.latest_version_code || 0) > 1 && s.apk_url);
+  // Les lecteurs web ne reçoivent pas d'APK : ils sont exclus des mises à jour.
+  const apkScreens = screens.filter(s => !isWebPlayer(s));
+  const rollout = apkScreens.filter(s => (s.latest_version_code || 0) > 1 && s.apk_url);
   const targetCode = Math.max(0, ...rollout.map(s => s.latest_version_code || 0));
   const inRollout = rollout.filter(s => (s.latest_version_code || 0) === targetCode);
   const doneCount = inRollout.filter(s => (screenVersionCode(s) ?? -1) >= targetCode).length;
@@ -77,8 +79,8 @@ export default function PlayerUpdates({
 
   const targets = (): string[] => {
     if (scope === 'test') return testScreen ? [testScreen] : [];
-    if (scope === 'group') return assigned.filter(s => s.configuration_id && configGroup.get(s.configuration_id) === groupId).map(s => s.id);
-    return screens.map(s => s.id);
+    if (scope === 'group') return assigned.filter(s => !isWebPlayer(s) && s.configuration_id && configGroup.get(s.configuration_id) === groupId).map(s => s.id);
+    return apkScreens.map(s => s.id);
   };
 
   const deploy = async () => {
@@ -227,7 +229,7 @@ export default function PlayerUpdates({
               {scope === 'test' && (
                 <Select value={testScreen} onChange={e => setTestScreen(e.target.value)} aria-label="Écran test">
                   <option value="">Choisir l’écran test</option>
-                  {screens.map(s => (
+                  {apkScreens.map(s => (
                     <option key={s.id} value={s.id}>
                       {s.id}
                       {isOnline(s.last_ping, now) ? '' : ' (hors ligne)'}

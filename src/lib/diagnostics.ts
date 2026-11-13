@@ -1,5 +1,6 @@
 // Moteur de diagnostic du parc : analyse les données et liste les problèmes, classés par gravité.
 import { healthLights, healthOf, networkLight, stabilityLight } from './health';
+import { isWebPlayer } from './playerRelease';
 import { IMAGE_SECONDS, ONLINE_THRESHOLD_MS, isGoogleDrive, isImageUrl, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from './media';
 import type { AppScreen, Configuration, Group, ScreenEvent, VideoFile } from './types';
 import { assess, wallTarget, type VideoAnalysis } from './videoAnalysis';
@@ -276,7 +277,7 @@ export function diagnose({ screens, configurations, groups, videos, media, now, 
         detail: `${commandLabel(s.command)} · envoyée ${timeAgo(s.command_at, now)}${s.player_version ? '' : ' · lecteur à mettre à jour'}`,
       });
     }
-    if (maxVersion > 0 && (s.latest_version_code || 0) < maxVersion) {
+    if (maxVersion > 0 && !isWebPlayer(s) && (s.latest_version_code || 0) < maxVersion) {
       add({ kind: 'outdated_version', severity: 'info', screenId: s.id, title: 'Lecteur pas à jour', detail: `v${s.latest_version_code || 0} · dernière v${maxVersion}` });
     }
   }

@@ -45,7 +45,7 @@ import type { AppScreen, Configuration, Group, ScreenCommand, ScreenEvent } from
 import PlayerUpdates from './PlayerUpdates';
 import { ControlCenter, HealthTiles, ScreenStrip, controlTiles } from './ControlCenter';
 import { healthLights, healthOf } from '../lib/health';
-import { screenVersionCode } from '../lib/playerRelease';
+import { supports } from '../lib/playerRelease';
 import { Button, EmptyState, IconButton, Modal, PageTitle, Segmented, StatusDot, cn, useFeedback } from './ui';
 
 interface MaintenanceProps {
@@ -795,7 +795,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
           online={on}
           now={now}
           refreshing={pending && s.command === 'health'}
-          onRefresh={(screenVersionCode(s) ?? 0) >= 10 && on ? () => refreshHealth(s) : undefined}
+          onRefresh={supports(s, 'health') && on ? () => refreshHealth(s) : undefined}
         />
 
         <dl className="divide-y divide-sand rounded-2xl border border-sand">
@@ -867,7 +867,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
               Vider le cache
             </Button>
             {/* Lecteur 1.12+ : SYNK comme application d'accueil de la TV */}
-            {(screenVersionCode(s) ?? 0) >= 14 && healthOf(s)?.home === false && (
+            {supports(s, 'home') && healthOf(s)?.home === false && (
               <div className="col-span-2 flex items-center gap-3 rounded-2xl border border-line bg-white p-3">
                 <House className="h-5 w-5 flex-shrink-0 text-brand" />
                 <span className="min-w-0 flex-1">
@@ -880,7 +880,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
               </div>
             )}
             {/* Lecteur 1.7+ : extinction réelle de l'écran hors horaires */}
-            {(screenVersionCode(s) ?? 0) >= 8 && (
+            {supports(s, 'power') && (
               <div className="col-span-2 flex items-center gap-3 rounded-2xl border border-line bg-white p-3">
                 <Moon className="h-5 w-5 flex-shrink-0 text-brand" />
                 <span className="min-w-0 flex-1">
@@ -897,7 +897,7 @@ export default function Maintenance({ groups, configurations, screens, onChanged
               </div>
             )}
             {/* Lecteur 1.4+ : la TV revient à l'écran QR code */}
-            {(screenVersionCode(s) ?? 0) >= 5 && (
+            {supports(s, 'unpair') && (
               <Button variant="dangerSoft" className="col-span-2" icon={<Unplug className="h-4 w-4" />} disabled={pending} onClick={() => sendCommand(s, 'unpair')}>
                 Déconnecter la TV
               </Button>

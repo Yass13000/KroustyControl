@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, FlipVertical2, Link2, Loader2, Plus, RefreshCw, Tv, WifiOff } from 'lucide-react';
 import { errorMessage, sendScreenCommand } from '../lib/data';
-import { screenVersionCode } from '../lib/playerRelease';
+import { supports } from '../lib/playerRelease';
 import { isOnline, parseFormat } from '../lib/media';
 import {
   cleanScreenName,
@@ -129,7 +129,7 @@ export default function PairScreen({
   const reference = occupant ?? inConfig.find(s => s.pos_x === 0 && s.pos_y === 0) ?? [...inConfig].sort((a, b) => a.pos_y - b.pos_y || a.pos_x - b.pos_x)[0];
   const inherited = reference?.rotation === 180;
   const flipped = upsideDown ?? inherited;
-  const canRotate = !!tv && (screenVersionCode(tv) ?? 0) >= 6;
+  const canRotate = !!tv && supports(tv, 'rotation');
 
   // Nom proposé : restaurant (+ mur s'il y en a plusieurs) + numéro de position.
   const suggested = group && config && place ? cleanScreenName(`${group.name}${groupConfigs.length > 1 ? ` ${config.name}` : ''} ${place.n}`) : '';

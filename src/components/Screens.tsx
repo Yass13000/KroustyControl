@@ -2,7 +2,7 @@ import { useMemo, useState, type ChangeEvent } from 'react';
 import { ArrowLeftRight, Camera, Check, ChevronLeft, Pencil, ChevronRight, Film, FlipVertical2, Hourglass, ImagePlus, LayoutGrid, Monitor, MonitorPlay, Plus, ScanEye, Search, Store, Trash2, Unplug, UserRound, QrCode, X } from 'lucide-react';
 import { sbClient } from '../lib/supabase';
 import { errorMessage, must, mustAll, sendScreenCommand, useAccounts, useLibrary } from '../lib/data';
-import { screenVersionCode } from '../lib/playerRelease';
+import { supports } from '../lib/playerRelease';
 import WeekCalendar from './WeekCalendar';
 import { FORMATS, fileNameFromUrl, isImageUrl, isOnline, parseFormat, parsePlaylist, timeAgo, transformStorageUrl } from '../lib/media';
 import type { AppScreen, Configuration, Group, Profile } from '../lib/types';
@@ -891,7 +891,7 @@ export default function Screens({ groups, configurations, screens, isSuperAdmin,
       {/* ======================= RÉGLAGES D'UN ÉCRAN DU MUR ======================= */}
       {(() => {
         const s = screens.find(scr => scr.id === slotScreenId);
-        const modern = s ? (screenVersionCode(s) ?? 0) >= 6 : false;
+        const modern = s ? supports(s, 'identify') : false;
         return (
           <Modal open={!!s && isSuperAdmin} onClose={() => setSlotScreenId(null)} size="sm" z="z-[60]" title={s?.id} leading={s && <StatusDot online={online(s)} sleeping={s.power_state === 'sleep'} />}>
             {s && (

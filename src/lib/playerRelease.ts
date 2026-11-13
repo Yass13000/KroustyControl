@@ -13,9 +13,22 @@ export const screenVersionCode = (s: Pick<AppScreen, 'player_version'>) => {
   return m ? Number(m[1]) : null;
 };
 
-/** Lecteur 1.6+ (code 7) : sait afficher des images dans la playlist. */
+/** Lecteur web (écrans Samsung pro, navigateurs) : player_version « Web 1.0 ». */
+export const isWebPlayer = (s: Pick<AppScreen, 'player_version'>) => /^web/i.test(s.player_version || '');
+
+export type PlayerFeature = 'images' | 'identify' | 'rotation' | 'unpair' | 'health' | 'power' | 'home' | 'apk';
+
+/** Version minimale du lecteur Android pour chaque fonction ; le lecteur web a sa propre liste. */
+const ANDROID_MIN: Record<PlayerFeature, number> = { unpair: 5, identify: 6, rotation: 6, images: 7, power: 8, health: 10, home: 14, apk: 0 };
+const WEB_FEATURES: PlayerFeature[] = ['images', 'identify', 'rotation', 'unpair', 'health'];
+
+/** Ce lecteur sait-il faire cela ? (les commandes inconnues sont simplement ignorées par la TV) */
+export const supports = (s: Pick<AppScreen, 'player_version'>, f: PlayerFeature) =>
+  isWebPlayer(s) ? WEB_FEATURES.includes(f) : (screenVersionCode(s) ?? 0) >= ANDROID_MIN[f];
+
+/** Lecteur 1.6+ (code 7) ou lecteur web : sait afficher des images dans la playlist. */
 export const IMAGE_MIN_CODE = 7;
-export const supportsImages = (s: Pick<AppScreen, 'player_version'>) => (screenVersionCode(s) ?? 0) >= IMAGE_MIN_CODE;
+export const supportsImages = (s: Pick<AppScreen, 'player_version'>) => supports(s, 'images');
 
 /** Étape de mise à jour d'un écran, en clair. */
 export function updateStatus(s: AppScreen, online: boolean): { label: string; tone: 'done' | 'progress' | 'waiting' | 'failed' | 'offline' } {

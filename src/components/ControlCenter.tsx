@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { isOnline } from '../lib/media';
 import { healthLights, healthOf, networkLight, stabilityLight, worstTone, type Light, type Tone } from '../lib/health';
-import { screenVersionCode } from '../lib/playerRelease';
+import { isWebPlayer, screenVersionCode, supports } from '../lib/playerRelease';
 import type { Issue, IssueKind, Severity } from '../lib/diagnostics';
 import type { AppScreen, Configuration } from '../lib/types';
 import { cn } from './ui';
@@ -107,12 +107,13 @@ export function controlTiles({
   // 5. Médias
   const mediaIssues = byKinds(['media_broken', 'media_drive', 'heavy_media', 'no_video']);
   // 6. Lecteurs
-  const codes = screens.map(s => screenVersionCode(s) ?? 0);
-  const latest = Math.max(0, ...codes);
-  const upToDate = screens.filter(s => (screenVersionCode(s) ?? 0) === latest).length;
+  // Lecteurs web : toujours à jour (ce sont des pages web) ; seuls les lecteurs Android se mettent à jour.
+  const android = screens.filter(s => !isWebPlayer(s));
+  const latest = Math.max(0, ...android.map(s => screenVersionCode(s) ?? 0));
+  const upToDate = screens.length - android.filter(s => (screenVersionCode(s) ?? 0) < latest).length;
   // 7. Veille
   const sleepIssues = byKinds(['sleep_while_open', 'awake_while_closed', 'scheduler_down']);
-  const eligible = screens.filter(s => (screenVersionCode(s) ?? 0) >= 8);
+  const eligible = screens.filter(s => supports(s, 'power'));
   const turnsOff = eligible.filter(s => s.screen_off).length;
   // 8. Appareils
   const devIssues = byKinds(['device_health']);
@@ -167,7 +168,7 @@ export function controlTiles({
       icon: PackageCheck,
       value: latest ? `${upToDate}/${screens.length}` : '—',
       tone: latest && upToDate < screens.length ? 'warn' : latest ? 'ok' : 'off',
-      match: s => (screenVersionCode(s) ?? 0) < latest,
+      match: s => !isWebPlayer(s) && (screenVersionCode(s) ?? 0) < latest,
     },
     {
       key: 'sleep',
@@ -175,7 +176,7 @@ export function controlTiles({
       icon: Moon,
       value: eligible.length ? `${turnsOff}/${eligible.length}` : '—',
       tone: sleepIssues.length ? sevTone(worstSeverity(sleepIssues)) : eligible.length ? (turnsOff < eligible.length ? 'warn' : 'ok') : 'off',
-      match: s => ((screenVersionCode(s) ?? 0) >= 8 && !s.screen_off) || sleepIssues.some(i => i.screenId === s.id),
+      match: s => (supports(s, 'power') && !s.screen_off) || sleepIssues.some(i => i.screenId === s.id),
     },
     {
       key: 'device',
