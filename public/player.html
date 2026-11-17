@@ -9,9 +9,11 @@
     /* Noir dès la première image (pas de flash blanc sur l'écran du magasin). */
     html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   </style>
+  <!-- Script classique (pas de module) : compatible avec les navigateurs anciens des écrans pro. -->
+  <link rel="stylesheet" href="/tv/player.css">
 </head>
 <body>
   <div id="synk"></div>
-  <script type="module" src="/src/player/main.ts"></script>
+  <script src="/tv/player.js"></script>
 </body>
 </html>
